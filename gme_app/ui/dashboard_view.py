@@ -81,6 +81,13 @@ class CreateProjectDialog (QDialog ):
         self .description_input .setPlaceholderText ("Describe the project goal briefly")
         self .description_input .setFixedHeight (110 )
 
+        analysis_scope_label =QLabel ("Тип запуска")
+        self .analysis_scope_combo =QComboBox ()
+        self .analysis_scope_combo .addItem ("Только эмоции","emotions_only")
+        self .analysis_scope_combo .addItem ("Только ложь","lie_only")
+        self .analysis_scope_combo .addItem ("Эмоции + ложь","emotions_and_lie")
+        self .analysis_scope_combo .currentIndexChanged .connect (self ._on_processing_mode_changed )
+
         model_label =QLabel ("Analysis Model")
         self .model_combo =QComboBox ()
         self .model_combo .addItems (self .models )
@@ -90,11 +97,11 @@ class CreateProjectDialog (QDialog ):
         for detector in self .detectors :
             self .detector_combo .addItem (detector ,detector )
 
-        processing_mode_label =QLabel ("Processing Mode")
+        processing_mode_label =QLabel ("Режим анализа лжи")
         self .processing_mode_combo =QComboBox ()
-        self .processing_mode_combo .addItem ("Video only","video_only")
-        self .processing_mode_combo .addItem ("Audio only","audio_only")
-        self .processing_mode_combo .addItem ("Audio + Video","audio_and_video")
+        self .processing_mode_combo .addItem ("Только видео","video_only")
+        self .processing_mode_combo .addItem ("Только аудио","audio_only")
+        self .processing_mode_combo .addItem ("Видео + аудио","audio_and_video")
         self .processing_mode_combo .currentIndexChanged .connect (self ._on_processing_mode_changed )
 
         audio_provider_label =QLabel ("Audio Provider")
@@ -143,6 +150,8 @@ class CreateProjectDialog (QDialog ):
         layout .addWidget (self .title_input )
         layout .addWidget (description_label )
         layout .addWidget (self .description_input )
+        layout .addWidget (analysis_scope_label )
+        layout .addWidget (self .analysis_scope_combo )
         layout .addWidget (model_label )
         layout .addWidget (self .model_combo )
         layout .addWidget (detector_label )
@@ -174,30 +183,49 @@ class CreateProjectDialog (QDialog ):
         if dialog .exec ()==QDialog .DialogCode .Accepted and dialog .recorded_path is not None :
             self .video_input .setText (str (dialog .recorded_path ))
 
+    def _current_analysis_scope (self )->str :
+        scope =str (self .analysis_scope_combo .currentData ()or "emotions_only").strip ().lower ()
+        if scope in {"emotions_only","lie_only","emotions_and_lie"}:
+            return scope
+        return "emotions_only"
+
+    def _current_lie_processing_mode (self )->str :
+        mode =str (self .processing_mode_combo .currentData ()or "audio_only").strip ().lower ()
+        if mode in {"video_only","audio_only","audio_and_video"}:
+            return mode
+        return "audio_only"
+
+    def _resolved_processing_mode (self )->str :
+        scope =self ._current_analysis_scope ()
+        if scope =="emotions_only":
+            return "video_only"
+        if scope =="emotions_and_lie":
+            return "audio_and_video"
+        return self ._current_lie_processing_mode ()
+
     def _on_accept (self )->None :
         self .error_label .hide ()
 
+        scope =self ._current_analysis_scope ()
         title =self .title_input .text ().strip ()
         video_path =self .video_input .text ().strip ()
         model_name =self .model_combo .currentText ().strip ()
         detector_name =str (self .detector_combo .currentData ()or "").strip ().lower ()
-        processing_mode =str (self .processing_mode_combo .currentData ()or "video_only").strip ().lower ()
         audio_provider_raw =str (self .audio_provider_combo .currentData ()or "").strip ().lower ()
-        audio_provider =""if audio_provider_raw in {"","__none__"}else audio_provider_raw 
 
         if len (title )<3 :
             self ._show_error ("Title must be at least 3 characters.")
             return 
-        if processing_mode in {"video_only","audio_and_video"}and not model_name :
+        if scope in {"emotions_only","emotions_and_lie"}and not model_name :
             self ._show_error ("Select an analysis model.")
             return 
         if not video_path :
             self ._show_error ("Choose a video file.")
             return 
-        if processing_mode in {"video_only","audio_and_video"}and not detector_name :
+        if scope in {"emotions_only","emotions_and_lie"}and not detector_name :
             self ._show_error ("Select a face detector.")
             return 
-        if processing_mode in {"audio_only","audio_and_video"}and audio_provider_raw in {"","__none__"}:
+        if scope in {"lie_only","emotions_and_lie"}and audio_provider_raw in {"","__none__"}:
             self ._show_error ("No compatible audio provider for this mode.")
             return 
         if not Path (video_path ).exists ():
@@ -211,30 +239,36 @@ class CreateProjectDialog (QDialog ):
         self .error_label .show ()
 
     def _on_processing_mode_changed (self )->None :
-        mode =str (self .processing_mode_combo .currentData ()or "video_only").strip ().lower ()
-        video_enabled =mode in {"video_only","audio_and_video"}
-        audio_enabled =mode in {"audio_only","audio_and_video"}
-        self ._refresh_audio_providers_for_mode (mode )
-        self .model_combo .setEnabled (video_enabled )
-        self .detector_combo .setEnabled (video_enabled )
+        scope =self ._current_analysis_scope ()
+        lie_mode =self ._current_lie_processing_mode ()
+        if scope =="emotions_and_lie":
+            lie_mode ="audio_and_video"
+
+        emotion_enabled =scope in {"emotions_only","emotions_and_lie"}
+        lie_enabled =scope in {"lie_only","emotions_and_lie"}
+        self ._refresh_audio_providers_for_mode (lie_mode )
+        self .model_combo .setEnabled (emotion_enabled )
+        self .detector_combo .setEnabled (emotion_enabled )
+        self .processing_mode_combo .setEnabled (lie_enabled and scope !="emotions_and_lie")
         has_compatible_audio_provider =str (self .audio_provider_combo .currentData ()or "")!="__none__"
-        self .audio_provider_combo .setEnabled (audio_enabled and has_compatible_audio_provider )
+        self .audio_provider_combo .setEnabled (lie_enabled and has_compatible_audio_provider )
 
     def _refresh_audio_providers_for_mode (self ,mode :str )->None :
         selected_code =str (self .audio_provider_combo .currentData ()or "").strip ().lower ()
         self .audio_provider_combo .blockSignals (True )
         self .audio_provider_combo .clear ()
 
-        if mode =="audio_and_video":
+        normalized_mode =str (mode or "").strip ().lower ()or "audio_only"
+        if normalized_mode =="audio_and_video":
             video_providers =[item for item in self .audio_providers if item .is_video_provider ]
             if video_providers :
                 providers =video_providers 
             else :
                 providers =[item for item in self .audio_providers if item .supports_video ]
-        elif mode =="audio_only":
+        elif normalized_mode =="audio_only":
             providers =[item for item in self .audio_providers if item .supports_audio ]
         else :
-            providers =[item for item in self .audio_providers if item .supports_audio or item .supports_video ]
+            providers =[item for item in self .audio_providers if item .supports_video ]
 
         for provider in providers :
             self .audio_provider_combo .addItem (provider .title ,provider .code )
@@ -257,7 +291,7 @@ class CreateProjectDialog (QDialog ):
         start_processing =self .start_processing_checkbox .isChecked (),
         model_name =self .model_combo .currentText ().strip (),
         detector_name =str (self .detector_combo .currentData ()or "").strip ().lower (),
-        processing_mode =str (self .processing_mode_combo .currentData ()or "video_only").strip ().lower (),
+        processing_mode =self ._resolved_processing_mode (),
         audio_provider =(
         ""
         if str (self .audio_provider_combo .currentData ()or "").strip ().lower ()in {"","__none__"}

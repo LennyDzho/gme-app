@@ -1100,6 +1100,15 @@ class MainWindow (QMainWindow ):
         frames =self ._extract_frames_payload (raw_payload )
         return self ._build_probability_timeline (frames ,prefer_risk =True )
 
+    @staticmethod
+    def _normalize_probability (raw_value :Any )->float :
+        value =safe_float (raw_value ,0.0 )
+        if value !=value :
+            return 0.0
+        if value >1.0 and value <=100.0 :
+            value =value /100.0
+        return max (0.0 ,min (1.0 ,value ))
+
     def _extract_audio_feature_series (self ,raw_payload :Any )->dict [str ,list [dict [str ,float ]]]:
         frames =self ._extract_frames_payload (raw_payload )
         result :dict [str ,list [dict [str ,float ]]]={}
@@ -1176,14 +1185,14 @@ class MainWindow (QMainWindow ):
 
             if prefer_risk :
                 if item .get ("deception_score")is not None :
-                    probabilities ["risk"]=max (0.0 ,min (1.0 ,safe_float (item .get ("deception_score"),0.0 )))
+                    probabilities ["risk"]=self ._normalize_probability (item .get ("deception_score"))
                 else :
                     probs_raw =item .get ("probabilities")
                     if isinstance (probs_raw ,dict ):
                         for key ,value in probs_raw .items ():
                             clean_key =str (key ).strip ().lower ()
                             if clean_key in LIE_RISK_KEYS :
-                                probabilities [clean_key ]=max (0.0 ,min (1.0 ,safe_float (value ,0.0 )))
+                                probabilities [clean_key ]=self ._normalize_probability (value )
                     if not probabilities :
                     # For audio-risk timeline, ignore emotion-like probabilities.
                         continue 
@@ -1194,11 +1203,11 @@ class MainWindow (QMainWindow ):
                         key =str (emotion ).strip ().lower ()
                         if not key :
                             continue 
-                        probabilities [key ]=max (0.0 ,min (1.0 ,safe_float (value ,0.0 )))
+                        probabilities [key ]=self ._normalize_probability (value )
 
                 if not probabilities :
                     emotion =str (item .get ("emotion","")).strip ().lower ()
-                    confidence =max (0.0 ,min (1.0 ,safe_float (item .get ("confidence"),0.0 )))
+                    confidence =self ._normalize_probability (item .get ("confidence"))
                     if emotion :
                         probabilities [emotion ]=confidence 
 
@@ -1267,7 +1276,7 @@ class MainWindow (QMainWindow ):
             densified .append (
             {
             "time":round (t ,3 ),
-            "probabilities":{name :safe_float (current_probs .get (name ),0.0 )for name in all_series },
+            "probabilities":{name :self ._normalize_probability (current_probs .get (name ))for name in all_series },
             }
             )
             t +=step 
@@ -1276,7 +1285,7 @@ class MainWindow (QMainWindow ):
             densified .append (
             {
             "time":round (max_time ,3 ),
-            "probabilities":{name :safe_float (current_probs .get (name ),0.0 )for name in all_series },
+            "probabilities":{name :self ._normalize_probability (current_probs .get (name ))for name in all_series },
             }
             )
 

@@ -25,6 +25,7 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSlider,
+    QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -151,6 +152,15 @@ LIE_RISK_KEYS: tuple[str, ...] = (
 )
 
 LIE_RISK_THRESHOLD = 0.65
+VIDEO_SEEK_STEP_SECONDS = 5.0
+COMBINED_SERIES_COLORS: dict[str, QColor] = {
+    "combined": QColor("#dc2626"),
+    "audio": QColor("#0ea5e9"),
+    "video": QColor("#16a34a"),
+}
+ANALYSIS_SCOPE_EMOTIONS_ONLY = "emotions_only"
+ANALYSIS_SCOPE_LIE_ONLY = "lie_only"
+ANALYSIS_SCOPE_EMOTIONS_AND_LIE = "emotions_and_lie"
 
 
 def safe_float(value: Any, default: float = 0.0) -> float:
@@ -162,6 +172,15 @@ def safe_float(value: Any, default: float = 0.0) -> float:
 
 def clamp_unit(value: float) -> float:
     return min(1.0, max(0.0, value))
+
+
+def normalize_probability(value: Any) -> float:
+    numeric = safe_float(value, 0.0)
+    if numeric != numeric:
+        return 0.0
+    if numeric > 1.0 and numeric <= 100.0:
+        numeric = numeric / 100.0
+    return clamp_unit(numeric)
 
 
 def format_seconds(seconds: float) -> str:
@@ -229,7 +248,7 @@ class EmotionTimelineWidget(QWidget):
                 name = str(emotion).strip().lower()
                 if not name:
                     continue
-                probability = min(1.0, max(0.0, safe_float(value, 0.0)))
+                probability = normalize_probability(value)
                 probs[name] = probability
                 emotion_scores[name].append(probability)
 
@@ -315,7 +334,7 @@ class EmotionTimelineWidget(QWidget):
                 probs = item.get("probabilities")
                 if not isinstance(probs, dict):
                     continue
-                probability = min(1.0, max(0.0, safe_float(probs.get(emotion), 0.0)))
+                probability = normalize_probability(probs.get(emotion))
 
                 x_ratio = time_sec / self._max_time if self._max_time > 0 else 0.0
                 x = int(self._plot_rect.left() + self._plot_rect.width() * x_ratio)
@@ -517,12 +536,12 @@ class CombinedLieTimelineWidget(QWidget):
             combined_raw = item.get("value")
             if combined_raw is None:
                 combined_raw = item.get("combined")
-            combined = clamp_unit(safe_float(combined_raw, 0.0))
+            combined = normalize_probability(combined_raw)
 
             audio_raw = item.get("audio")
             video_raw = item.get("video")
-            audio_value = None if audio_raw is None else clamp_unit(safe_float(audio_raw, 0.0))
-            video_value = None if video_raw is None else clamp_unit(safe_float(video_raw, 0.0))
+            audio_value = None if audio_raw is None else normalize_probability(audio_raw)
+            video_value = None if video_raw is None else normalize_probability(video_raw)
 
             if audio_value is not None:
                 has_audio = True
@@ -694,6 +713,76 @@ class CombinedLieTimelineWidget(QWidget):
         self.update()
 
 
+class PlaybackVideoWidget(QVideoWidget):
+    """Video widget with keyboard shortcuts for playback and fullscreen."""
+
+    play_pause_requested = pyqtSignal()
+    seek_requested = pyqtSignal(float)
+    toggle_fullscreen_requested = pyqtSignal()
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setStyleSheet("background-color: #000000;")
+        self.setAspectRatioMode(Qt.AspectRatioMode.KeepAspectRatio)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+
+    def _reposition_characteristic_badge(self) -> None:
+        return
+
+    def set_characteristic_badge(self, text: str, color: QColor | None = None) -> None:
+        return
+
+    def clear_characteristic_badge(self) -> None:
+        return
+
+    def mousePressEvent(self, event) -> None:  # type: ignore[override]
+        self.setFocus(Qt.FocusReason.MouseFocusReason)
+        super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event) -> None:  # type: ignore[override]
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.toggle_fullscreen_requested.emit()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
+    def keyPressEvent(self, event) -> None:  # type: ignore[override]
+        key = event.key()
+        if key == Qt.Key.Key_Space:
+            self.play_pause_requested.emit()
+            event.accept()
+            return
+        if key == Qt.Key.Key_Left:
+            self.seek_requested.emit(-VIDEO_SEEK_STEP_SECONDS)
+            event.accept()
+            return
+        if key == Qt.Key.Key_Right:
+            self.seek_requested.emit(VIDEO_SEEK_STEP_SECONDS)
+            event.accept()
+            return
+        if key in {Qt.Key.Key_F, Qt.Key.Key_Enter, Qt.Key.Key_Return}:
+            self.toggle_fullscreen_requested.emit()
+            event.accept()
+            return
+        if key == Qt.Key.Key_Escape and self.isFullScreen():
+            self.toggle_fullscreen_requested.emit()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def closeEvent(self, event) -> None:  # type: ignore[override]
+        if self.isFullScreen():
+            self.toggle_fullscreen_requested.emit()
+            event.ignore()
+            return
+        super().closeEvent(event)
+
+    def resizeEvent(self, event) -> None:  # type: ignore[override]
+        super().resizeEvent(event)
+        self._reposition_characteristic_badge()
+
+
 class ProjectView(QWidget):
     back_requested = pyqtSignal()
     refresh_requested = pyqtSignal(str, str)
@@ -735,6 +824,7 @@ class ProjectView(QWidget):
         self._current_media_path: str | None = None
         self._pending_seek_ms: int | None = None
         self._resume_after_switch = False
+        self._fullscreen_video_widget: PlaybackVideoWidget | None = None
 
         self.media_player = QMediaPlayer(self)
         self.audio_output = QAudioOutput(self)
@@ -812,8 +902,11 @@ class ProjectView(QWidget):
 
         video_layout.addLayout(video_header)
 
-        self.video_widget = QVideoWidget()
+        self.video_widget = PlaybackVideoWidget()
         self.video_widget.setMinimumHeight(340)
+        self.video_widget.play_pause_requested.connect(self._toggle_playback)
+        self.video_widget.seek_requested.connect(self._seek_video_by_seconds)
+        self.video_widget.toggle_fullscreen_requested.connect(self._toggle_video_fullscreen)
         self.media_player.setVideoOutput(self.video_widget)
         video_layout.addWidget(self.video_widget)
 
@@ -823,20 +916,29 @@ class ProjectView(QWidget):
         self.play_button = QPushButton("▶")
         self.play_button.setObjectName("SecondaryButton")
         self.play_button.setFixedWidth(46)
+        self.play_button.setToolTip("Play/Pause (Space)")
         self.play_button.clicked.connect(self._toggle_playback)
+
+        self.fullscreen_button = QPushButton("⛶")
+        self.fullscreen_button.setObjectName("SecondaryButton")
+        self.fullscreen_button.setFixedWidth(46)
+        self.fullscreen_button.clicked.connect(self._toggle_video_fullscreen)
 
         self.position_slider = QSlider(Qt.Orientation.Horizontal)
         self.position_slider.setRange(0, 0)
         self.position_slider.sliderMoved.connect(self.media_player.setPosition)
+        self.position_slider.setToolTip("Перемотка: ←/→")
 
         self.time_label = QLabel("00:00 / 00:00")
         self.time_label.setObjectName("SectionHint")
 
         controls_row.addWidget(self.play_button)
+        controls_row.addWidget(self.fullscreen_button)
         controls_row.addWidget(self.position_slider, 1)
         controls_row.addWidget(self.time_label)
 
         video_layout.addLayout(controls_row)
+        self._sync_video_fullscreen_button_state()
         left_col.addWidget(self.video_frame)
 
         chart_frame = QFrame()
@@ -938,12 +1040,21 @@ class ProjectView(QWidget):
         controls = QHBoxLayout()
         controls.setSpacing(8)
 
+        self.analysis_scope_combo = QComboBox()
+        self.analysis_scope_combo.setMinimumWidth(170)
+        self.analysis_scope_combo.setToolTip("Тип анализа")
+        self.analysis_scope_combo.addItem("Только эмоции", ANALYSIS_SCOPE_EMOTIONS_ONLY)
+        self.analysis_scope_combo.addItem("Только ложь", ANALYSIS_SCOPE_LIE_ONLY)
+        self.analysis_scope_combo.addItem("Эмоции + ложь", ANALYSIS_SCOPE_EMOTIONS_AND_LIE)
+        self.analysis_scope_combo.currentIndexChanged.connect(self._on_processing_mode_changed)
+
         self.model_combo = QComboBox()
         self.model_combo.setMinimumWidth(140)
         self.detector_combo = QComboBox()
         self.detector_combo.setMinimumWidth(150)
         self.processing_mode_combo = QComboBox()
         self.processing_mode_combo.setMinimumWidth(150)
+        self.processing_mode_combo.setToolTip("Режим анализа лжи")
         self.processing_mode_combo.addItem("Только видео", "video_only")
         self.processing_mode_combo.addItem("Только аудио", "audio_only")
         self.processing_mode_combo.addItem("Видео + аудио", "audio_and_video")
@@ -966,6 +1077,7 @@ class ProjectView(QWidget):
         self.delete_project_button.setObjectName("SecondaryButton")
         self.delete_project_button.clicked.connect(self._emit_delete_project)
 
+        controls.addWidget(self.analysis_scope_combo, 1)
         controls.addWidget(self.model_combo, 1)
         controls.addWidget(self.detector_combo, 1)
         controls.addWidget(self.processing_mode_combo, 1)
@@ -1102,7 +1214,7 @@ class ProjectView(QWidget):
     def set_audio_providers(self, providers: list[AudioProvider]) -> None:
         self._audio_providers = [item for item in providers if item.code]
         self._refresh_audio_providers_for_mode(
-            str(self.processing_mode_combo.currentData() or "video_only").strip().lower()
+            self._current_lie_processing_mode()
         )
         self._on_processing_mode_changed()
         self._update_permissions_state()
@@ -1112,6 +1224,7 @@ class ProjectView(QWidget):
         self.refresh_button.setDisabled(loading)
         self.start_processing_button.setDisabled(loading or not self._can_edit_project)
         self.cancel_processing_button.setDisabled(loading or not self._can_edit_project)
+        self.analysis_scope_combo.setDisabled(loading or not self._can_edit_project)
         self.model_combo.setDisabled(loading or not self._can_edit_project)
         self.detector_combo.setDisabled(loading or not self._can_edit_project)
         self.processing_mode_combo.setDisabled(loading or not self._can_edit_project)
@@ -1123,6 +1236,8 @@ class ProjectView(QWidget):
         self.member_role_combo.setDisabled(loading or not self._can_manage_members)
         if loading and message:
             self.set_status_message(message, is_error=False)
+        if not loading:
+            self._on_processing_mode_changed()
 
     def set_status_message(self, message: str, *, is_error: bool) -> None:
         if not message:
@@ -1183,6 +1298,7 @@ class ProjectView(QWidget):
         self._render_members_table()
         self._update_permissions_state()
         self._sync_video_source()
+        self._update_video_characteristic_overlay(self.media_player.position() / 1000 if self.media_player.position() > 0 else 0.0)
 
     def _render_audio_feature_widgets(self) -> None:
         self._clear_layout(self.audio_features_charts_layout)
@@ -1334,6 +1450,7 @@ class ProjectView(QWidget):
         for name in series_names:
             checkbox = QCheckBox(emotion_label_ru(name))
             checkbox.setChecked(name in enabled_series)
+            self._apply_series_checkbox_style(checkbox, EMOTION_COLORS.get(name, QColor("#0ea5e9")))
             checkbox.toggled.connect(
                 lambda checked, metric=name, chart=source: self._on_series_toggle(chart, metric, checked)
             )
@@ -1374,22 +1491,50 @@ class ProjectView(QWidget):
 
         combined_cb = QCheckBox("Объединенный риск")
         combined_cb.setChecked(self._show_combined_risk)
+        self._apply_series_checkbox_style(combined_cb, COMBINED_SERIES_COLORS["combined"])
         combined_cb.toggled.connect(lambda checked: self._on_combined_series_toggle("combined", checked))
         self.combined_series_controls_layout.addWidget(combined_cb)
 
         if any(item.get("audio") is not None for item in self.current_combined_lie_timeline):
             audio_cb = QCheckBox("Аудио-риск")
             audio_cb.setChecked(self._show_combined_audio)
+            self._apply_series_checkbox_style(audio_cb, COMBINED_SERIES_COLORS["audio"])
             audio_cb.toggled.connect(lambda checked: self._on_combined_series_toggle("audio", checked))
             self.combined_series_controls_layout.addWidget(audio_cb)
 
         if any(item.get("video") is not None for item in self.current_combined_lie_timeline):
             video_cb = QCheckBox("Видео-риск")
             video_cb.setChecked(self._show_combined_video)
+            self._apply_series_checkbox_style(video_cb, COMBINED_SERIES_COLORS["video"])
             video_cb.toggled.connect(lambda checked: self._on_combined_series_toggle("video", checked))
             self.combined_series_controls_layout.addWidget(video_cb)
 
         self.combined_series_controls_layout.addStretch(1)
+
+    @staticmethod
+    def _apply_series_checkbox_style(checkbox: QCheckBox, color: QColor) -> None:
+        text_color = color.darker(150).name()
+        border_color = color.darker(125).name()
+        fill_color = color.name()
+        checkbox.setStyleSheet(
+            f"""
+            QCheckBox {{
+                color: {text_color};
+                font-weight: 600;
+            }}
+            QCheckBox::indicator {{
+                width: 14px;
+                height: 14px;
+                border: 1px solid {border_color};
+                border-radius: 3px;
+                background: #ffffff;
+            }}
+            QCheckBox::indicator:checked {{
+                background: {fill_color};
+                border: 1px solid {border_color};
+            }}
+            """
+        )
 
     def _on_combined_series_toggle(self, series_name: str, enabled: bool) -> None:
         if series_name == "combined":
@@ -1496,7 +1641,7 @@ class ProjectView(QWidget):
             clean_key = str(key).strip().lower()
             if not clean_key:
                 continue
-            normalized[clean_key] = clamp_unit(safe_float(value, 0.0))
+            normalized[clean_key] = normalize_probability(value)
 
         if not normalized:
             return None
@@ -1545,7 +1690,7 @@ class ProjectView(QWidget):
 
         for idx, item in enumerate(points):
             t = max(0.0, safe_float(item.get("time"), 0.0))
-            score = clamp_unit(safe_float(item.get("value"), 0.0))
+            score = normalize_probability(item.get("value"))
 
             if score >= threshold_value and current_start is None:
                 current_start = t
@@ -1566,21 +1711,46 @@ class ProjectView(QWidget):
         run_id = self.current_selected_run_id or ""
         self.refresh_requested.emit(str(self.current_project.id), run_id)
 
+    def _current_analysis_scope(self) -> str:
+        scope = str(self.analysis_scope_combo.currentData() or ANALYSIS_SCOPE_EMOTIONS_ONLY).strip().lower()
+        if scope in {
+            ANALYSIS_SCOPE_EMOTIONS_ONLY,
+            ANALYSIS_SCOPE_LIE_ONLY,
+            ANALYSIS_SCOPE_EMOTIONS_AND_LIE,
+        }:
+            return scope
+        return ANALYSIS_SCOPE_EMOTIONS_ONLY
+
+    def _current_lie_processing_mode(self) -> str:
+        mode = str(self.processing_mode_combo.currentData() or "audio_only").strip().lower()
+        if mode in {"video_only", "audio_only", "audio_and_video"}:
+            return mode
+        return "audio_only"
+
+    def _resolved_processing_mode(self) -> str:
+        scope = self._current_analysis_scope()
+        if scope == ANALYSIS_SCOPE_EMOTIONS_ONLY:
+            return "video_only"
+        if scope == ANALYSIS_SCOPE_EMOTIONS_AND_LIE:
+            return "audio_and_video"
+        return self._current_lie_processing_mode()
+
     def _emit_start_processing(self) -> None:
         if self.current_project is None:
             return
+        scope = self._current_analysis_scope()
         model_name = self.model_combo.currentText().strip()
         detector_name = str(self.detector_combo.currentData() or "").strip().lower()
-        processing_mode = str(self.processing_mode_combo.currentData() or "video_only").strip().lower()
+        processing_mode = self._resolved_processing_mode()
         audio_provider_raw = str(self.audio_provider_combo.currentData() or "").strip().lower()
         audio_provider = "" if audio_provider_raw in {"", "__none__"} else audio_provider_raw
-        if processing_mode in {"video_only", "audio_and_video"} and not model_name:
+        if scope in {ANALYSIS_SCOPE_EMOTIONS_ONLY, ANALYSIS_SCOPE_EMOTIONS_AND_LIE} and not model_name:
             self.set_status_message("Выберите модель для запуска обработки.", is_error=True)
             return
-        if processing_mode in {"video_only", "audio_and_video"} and not detector_name:
+        if scope in {ANALYSIS_SCOPE_EMOTIONS_ONLY, ANALYSIS_SCOPE_EMOTIONS_AND_LIE} and not detector_name:
             self.set_status_message("Выберите детектор лица для запуска обработки.", is_error=True)
             return
-        if processing_mode in {"audio_only", "audio_and_video"} and audio_provider_raw in {"", "__none__"}:
+        if scope in {ANALYSIS_SCOPE_LIE_ONLY, ANALYSIS_SCOPE_EMOTIONS_AND_LIE} and audio_provider_raw in {"", "__none__"}:
             self.set_status_message("Для выбранного режима нет подходящего аудио-провайдера.", is_error=True)
             return
         self.start_processing_requested.emit(
@@ -1592,30 +1762,44 @@ class ProjectView(QWidget):
         )
 
     def _on_processing_mode_changed(self) -> None:
-        mode = str(self.processing_mode_combo.currentData() or "video_only").strip().lower()
-        video_enabled = mode in {"video_only", "audio_and_video"}
-        audio_enabled = mode in {"audio_only", "audio_and_video"}
-        self._refresh_audio_providers_for_mode(mode)
-        self.model_combo.setEnabled(self._can_edit_project and video_enabled)
-        self.detector_combo.setEnabled(self._can_edit_project and video_enabled)
+        scope = self._current_analysis_scope()
+        lie_mode = self._current_lie_processing_mode()
+        if scope == ANALYSIS_SCOPE_EMOTIONS_AND_LIE:
+            lie_mode = "audio_and_video"
+
+        emotions_enabled = scope in {ANALYSIS_SCOPE_EMOTIONS_ONLY, ANALYSIS_SCOPE_EMOTIONS_AND_LIE}
+        lie_enabled = scope in {ANALYSIS_SCOPE_LIE_ONLY, ANALYSIS_SCOPE_EMOTIONS_AND_LIE}
+        self.start_processing_button.setEnabled(
+            self._can_edit_project and (not emotions_enabled or bool(self._models))
+        )
+        self.analysis_scope_combo.setEnabled(self._can_edit_project)
+        self._refresh_audio_providers_for_mode(lie_mode)
+        self.model_combo.setEnabled(self._can_edit_project and emotions_enabled)
+        self.detector_combo.setEnabled(self._can_edit_project and emotions_enabled)
+        self.processing_mode_combo.setEnabled(
+            self._can_edit_project
+            and lie_enabled
+            and scope != ANALYSIS_SCOPE_EMOTIONS_AND_LIE
+        )
         has_compatible_audio_provider = str(self.audio_provider_combo.currentData() or "") != "__none__"
-        self.audio_provider_combo.setEnabled(self._can_edit_project and audio_enabled and has_compatible_audio_provider)
+        self.audio_provider_combo.setEnabled(self._can_edit_project and lie_enabled and has_compatible_audio_provider)
 
     def _refresh_audio_providers_for_mode(self, mode: str) -> None:
         selected_code = str(self.audio_provider_combo.currentData() or "").strip().lower()
         self.audio_provider_combo.blockSignals(True)
         self.audio_provider_combo.clear()
 
-        if mode == "audio_and_video":
+        normalized_mode = str(mode or "").strip().lower() or "audio_only"
+        if normalized_mode == "audio_and_video":
             video_providers = [item for item in self._audio_providers if item.is_video_provider]
             if video_providers:
                 providers = video_providers
             else:
                 providers = [item for item in self._audio_providers if item.supports_video]
-        elif mode == "audio_only":
+        elif normalized_mode == "audio_only":
             providers = [item for item in self._audio_providers if item.supports_audio]
         else:
-            providers = [item for item in self._audio_providers if item.supports_audio or item.supports_video]
+            providers = [item for item in self._audio_providers if item.supports_video]
 
         for provider in providers:
             self.audio_provider_combo.addItem(provider.title, provider.code)
@@ -1850,8 +2034,8 @@ class ProjectView(QWidget):
                     self._can_edit_project = True
                     self._can_manage_members = True
 
-        self.start_processing_button.setEnabled(self._can_edit_project and bool(self._models))
-        self.processing_mode_combo.setEnabled(self._can_edit_project)
+        self.start_processing_button.setEnabled(self._can_edit_project)
+        self.analysis_scope_combo.setEnabled(self._can_edit_project)
         self._on_processing_mode_changed()
         self.delete_project_button.setEnabled(self._can_edit_project)
         self.add_member_button.setEnabled(self._can_manage_members)
@@ -1864,6 +2048,42 @@ class ProjectView(QWidget):
         else:
             self.media_player.play()
 
+    def _seek_video_by_seconds(self, delta_seconds: float) -> None:
+        duration_ms = self.media_player.duration()
+        if duration_ms <= 0:
+            return
+        target_ms = self.media_player.position() + int(delta_seconds * 1000)
+        clamped_ms = max(0, min(duration_ms, target_ms))
+        self.media_player.setPosition(clamped_ms)
+
+    def _toggle_video_fullscreen(self) -> None:
+        if self._fullscreen_video_widget is not None:
+            self.media_player.setVideoOutput(self.video_widget)
+            self._fullscreen_video_widget.hide()
+            self._fullscreen_video_widget.deleteLater()
+            self._fullscreen_video_widget = None
+            self.video_widget.setFocus(Qt.FocusReason.ShortcutFocusReason)
+            self._sync_video_fullscreen_button_state()
+            return
+
+        fullscreen_widget = PlaybackVideoWidget()
+        fullscreen_widget.setWindowTitle("Видео анализа")
+        fullscreen_widget.play_pause_requested.connect(self._toggle_playback)
+        fullscreen_widget.seek_requested.connect(self._seek_video_by_seconds)
+        fullscreen_widget.toggle_fullscreen_requested.connect(self._toggle_video_fullscreen)
+        self._fullscreen_video_widget = fullscreen_widget
+
+        self.media_player.setVideoOutput(fullscreen_widget)
+        fullscreen_widget.showFullScreen()
+        fullscreen_widget.setFocus(Qt.FocusReason.ShortcutFocusReason)
+        self._sync_video_fullscreen_button_state()
+
+    def _sync_video_fullscreen_button_state(self) -> None:
+        if self._fullscreen_video_widget is not None:
+            self.fullscreen_button.setToolTip("Выйти из полноэкранного режима (Esc)")
+        else:
+            self.fullscreen_button.setToolTip("Открыть видео на весь экран (двойной клик, F, Enter)")
+
     def _on_player_position_changed(self, position_ms: int) -> None:
         self.position_slider.blockSignals(True)
         self.position_slider.setValue(position_ms)
@@ -1872,6 +2092,7 @@ class ProjectView(QWidget):
         duration_sec = self.media_player.duration() / 1000 if self.media_player.duration() > 0 else 0
         current_sec = position_ms / 1000 if position_ms > 0 else 0
         self.time_label.setText(f"{format_seconds(current_sec)} / {format_seconds(duration_sec)}")
+        self._update_video_characteristic_overlay(current_sec)
 
     def _on_player_duration_changed(self, duration_ms: int) -> None:
         self.position_slider.setRange(0, max(0, duration_ms))
@@ -1909,11 +2130,13 @@ class ProjectView(QWidget):
             self.media_player.stop()
             self._current_media_path = None
             self.time_label.setText("00:00 / 00:00")
+            self.video_widget.clear_characteristic_badge()
             return
 
         if not Path(preferred_path).exists():
             self._current_media_path = None
             self.set_status_message("Видеофайл недоступен локально.", is_error=True)
+            self.video_widget.clear_characteristic_badge()
             return
 
         if self._current_media_path == preferred_path:
@@ -1926,6 +2149,7 @@ class ProjectView(QWidget):
         self.media_player.stop()
         self.media_player.setSource(QUrl.fromLocalFile(str(Path(preferred_path).resolve())))
         self._current_media_path = preferred_path
+        self._update_video_characteristic_overlay(0.0)
 
     def _seek_video_to_time(self, second: float) -> None:
         duration_sec = self.media_player.duration() / 1000 if self.media_player.duration() > 0 else 0
@@ -1934,6 +2158,69 @@ class ProjectView(QWidget):
 
         clamped = max(0.0, min(duration_sec, second))
         self.media_player.setPosition(int(clamped * 1000))
+
+    @staticmethod
+    def _closest_timeline_point(points: list[dict[str, Any]], second: float) -> dict[str, Any] | None:
+        if not points:
+            return None
+        target = max(0.0, safe_float(second, 0.0))
+        closest_item: dict[str, Any] | None = None
+        closest_delta: float | None = None
+        for item in points:
+            if not isinstance(item, dict):
+                continue
+            current_time = max(0.0, safe_float(item.get("time"), 0.0))
+            delta = abs(current_time - target)
+            if closest_delta is None or delta < closest_delta:
+                closest_item = item
+                closest_delta = delta
+        return closest_item
+
+    @staticmethod
+    def _most_probable_characteristic(probs_raw: dict[str, Any]) -> tuple[str, float] | None:
+        best_name = ""
+        best_value = -1.0
+        for key, value in probs_raw.items():
+            clean_key = str(key).strip().lower()
+            if not clean_key:
+                continue
+            probability = normalize_probability(value)
+            if probability > best_value:
+                best_name = clean_key
+                best_value = probability
+        if not best_name:
+            return None
+        return best_name, max(0.0, best_value)
+
+    def _update_video_characteristic_overlay(self, current_second: float) -> None:
+        timeline = self.current_video_timeline if self.current_video_timeline else self.current_audio_timeline
+        if not timeline:
+            self.video_widget.clear_characteristic_badge()
+            return
+
+        closest_point = self._closest_timeline_point(timeline, current_second)
+        if closest_point is None:
+            self.video_widget.clear_characteristic_badge()
+            return
+
+        probs_raw = closest_point.get("probabilities")
+        if not isinstance(probs_raw, dict) or not probs_raw:
+            self.video_widget.clear_characteristic_badge()
+            return
+
+        dominant = self._most_probable_characteristic(probs_raw)
+        if dominant is None:
+            self.video_widget.clear_characteristic_badge()
+            return
+
+        name, probability = dominant
+        label = emotion_label_ru(name)
+        color = EMOTION_COLORS.get(name)
+        if color is None and name in LIE_RISK_KEYS:
+            color = QColor("#dc2626")
+        if color is None:
+            color = QColor("#0ea5e9")
+        self.video_widget.set_characteristic_badge(f"{label}: {probability:.2f}", color)
 
     def export_report_pdf(self) -> None:
         project = self.current_project
@@ -2060,7 +2347,7 @@ class ProjectView(QWidget):
             best_emotion = None
             best_value = -1.0
             for emotion, value in probs.items():
-                probability = clamp_unit(safe_float(value, 0.0))
+                probability = normalize_probability(value)
                 average_scores[str(emotion)].append(probability)
                 if probability > best_value:
                     best_value = probability
@@ -2087,7 +2374,7 @@ class ProjectView(QWidget):
 
         if self.current_combined_lie_timeline:
             combined_values = [
-                clamp_unit(safe_float(item.get("value"), 0.0))
+                normalize_probability(item.get("value"))
                 for item in self.current_combined_lie_timeline
             ]
             if combined_values:
