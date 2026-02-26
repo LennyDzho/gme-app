@@ -9,6 +9,7 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
@@ -81,13 +82,15 @@ class MetricCard(QFrame):
 
 
 class ProjectCard(QFrame):
-    start_processing_requested = pyqtSignal(str)
+    open_project_requested = pyqtSignal(str)
 
     def __init__(self, project: Project, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.project = project
         self.setObjectName("ProjectCard")
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        # Let cards shrink with available width; otherwise their minimum size can lock content width.
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self.setMinimumWidth(0)
         self.setMinimumHeight(190)
 
         layout = QVBoxLayout(self)
@@ -100,7 +103,7 @@ class ProjectCard(QFrame):
         title = QLabel(project.title)
         title.setObjectName("ProjectTitle")
         title.setWordWrap(True)
-        title.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        title.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
 
         badge = StatusBadge(project_status_label(project.status), project.status)
         top_row.addWidget(title, 1)
@@ -109,27 +112,29 @@ class ProjectCard(QFrame):
         description = QLabel(project.description or "Описание не задано")
         description.setWordWrap(True)
         description.setObjectName("ProjectMeta")
+        description.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         description.setMaximumHeight(54)
 
         meta = QLabel(f"Обновлен: {format_datetime(project.updated_at)}")
         meta.setObjectName("ProjectMeta")
+        meta.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
 
         footer = QHBoxLayout()
         footer.setSpacing(10)
         footer.addWidget(meta, 1)
 
-        run_button = QPushButton("Запустить обработку")
-        run_button.setObjectName("SecondaryButton")
-        run_button.clicked.connect(self._emit_start_processing)
-        footer.addWidget(run_button, 0)
+        open_button = QPushButton("Открыть проект")
+        open_button.setObjectName("PrimaryButton")
+        open_button.clicked.connect(self._emit_open_project)
+        footer.addWidget(open_button, 0)
 
         layout.addLayout(top_row)
         layout.addWidget(description)
         layout.addStretch(1)
         layout.addLayout(footer)
 
-    def _emit_start_processing(self) -> None:
-        self.start_processing_requested.emit(str(self.project.id))
+    def _emit_open_project(self) -> None:
+        self.open_project_requested.emit(str(self.project.id))
 
 
 class ResponsiveGrid(QWidget):
@@ -143,6 +148,8 @@ class ResponsiveGrid(QWidget):
         super().__init__(parent)
         self._min_column_width = min_column_width
         self._items: list[QWidget] = []
+        self._last_columns = 0
+        self._is_reflowing = False
         self._grid = QGridLayout(self)
         self._grid.setContentsMargins(0, 0, 0, 0)
         self._grid.setHorizontalSpacing(spacing)
@@ -153,6 +160,13 @@ class ResponsiveGrid(QWidget):
         self._reflow()
 
     def set_items(self, widgets: list[QWidget]) -> None:
+        active_widget_ids = {id(widget) for widget in widgets}
+        for widget in self._items:
+            if id(widget) in active_widget_ids:
+                continue
+            self._grid.removeWidget(widget)
+            widget.setParent(None)
+            widget.deleteLater()
         self._items = widgets
         self._reflow()
 
@@ -161,23 +175,44 @@ class ResponsiveGrid(QWidget):
             item = self._grid.takeAt(0)
             widget = item.widget()
             if widget is not None:
-                widget.setParent(self)
+                self._grid.removeWidget(widget)
 
     def _reflow(self) -> None:
-        self._clear_layout()
-        if not self._items:
+        if self._is_reflowing:
             return
+        self._is_reflowing = True
+        try:
+            self._clear_layout()
+            for column in range(self._last_columns):
+                self._grid.setColumnStretch(column, 0)
 
-        available_width = max(self.width(), self.minimumWidth())
-        columns = max(1, available_width // self._min_column_width)
+            if not self._items:
+                self._last_columns = 0
+                return
 
-        for index, widget in enumerate(self._items):
-            row = index // columns
-            column = index % columns
-            self._grid.addWidget(widget, row, column)
+            # Derive width from scroll viewport when available, otherwise use local widget width.
+            # This prevents stale content width from forcing a single long row after window resize.
+            available_width = max(self._available_width(), 1)
+            columns = max(1, available_width // self._min_column_width)
 
-        for column in range(columns):
-            self._grid.setColumnStretch(column, 1)
+            for index, widget in enumerate(self._items):
+                row = index // columns
+                column = index % columns
+                self._grid.addWidget(widget, row, column)
+
+            for column in range(columns):
+                self._grid.setColumnStretch(column, 1)
+            self._last_columns = columns
+        finally:
+            self._is_reflowing = False
+
+    def _available_width(self) -> int:
+        parent = self.parentWidget()
+        while parent is not None:
+            if isinstance(parent, QScrollArea):
+                return parent.viewport().width()
+            parent = parent.parentWidget()
+        return self.contentsRect().width()
 
     def resizeEvent(self, event) -> None:  # type: ignore[override]
         super().resizeEvent(event)

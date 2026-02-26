@@ -202,6 +202,16 @@ QFrame#ProjectCard:hover {
     border: 1px solid #c7d6ff;
 }
 
+QFrame#DetailCard {
+    background: #fbfcff;
+    border: 1px solid #dde5fb;
+    border-radius: 16px;
+}
+
+QFrame#DetailCard QLabel {
+    background: transparent;
+}
+
 QLabel#ProjectTitle {
     font-size: 18px;
     font-weight: 700;
