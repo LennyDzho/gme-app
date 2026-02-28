@@ -57,7 +57,7 @@ class CreateProjectDialog (QDialog ):
     parent :QWidget |None =None ,
     )->None :
         super ().__init__ (parent )
-        self .setWindowTitle ("Create Project")
+        self .setWindowTitle ("Создать проект")
         self .setModal (True )
         self .resize (680 ,470 )
 
@@ -72,13 +72,13 @@ class CreateProjectDialog (QDialog ):
         layout .setContentsMargins (18 ,18 ,18 ,18 )
         layout .setSpacing (10 )
 
-        title_label =QLabel ("Project Title")
+        title_label =QLabel ("Название проекта")
         self .title_input =QLineEdit ()
-        self .title_input .setPlaceholderText ("Example: Interview_01")
+        self .title_input .setPlaceholderText ("Например: Интервью_01")
 
-        description_label =QLabel ("Description")
+        description_label =QLabel ("Описание")
         self .description_input =QTextEdit ()
-        self .description_input .setPlaceholderText ("Describe the project goal briefly")
+        self .description_input .setPlaceholderText ("Кратко опишите цель проекта")
         self .description_input .setFixedHeight (110 )
 
         analysis_scope_label =QLabel ("Тип запуска")
@@ -88,11 +88,11 @@ class CreateProjectDialog (QDialog ):
         self .analysis_scope_combo .addItem ("Эмоции + ложь","emotions_and_lie")
         self .analysis_scope_combo .currentIndexChanged .connect (self ._on_processing_mode_changed )
 
-        model_label =QLabel ("Analysis Model")
+        model_label =QLabel ("Модель анализа")
         self .model_combo =QComboBox ()
         self .model_combo .addItems (self .models )
 
-        detector_label =QLabel ("Face Detector")
+        detector_label =QLabel ("Детектор лица")
         self .detector_combo =QComboBox ()
         for detector in self .detectors :
             self .detector_combo .addItem (detector ,detector )
@@ -104,21 +104,21 @@ class CreateProjectDialog (QDialog ):
         self .processing_mode_combo .addItem ("Видео + аудио","audio_and_video")
         self .processing_mode_combo .currentIndexChanged .connect (self ._on_processing_mode_changed )
 
-        audio_provider_label =QLabel ("Audio Provider")
+        audio_provider_label =QLabel ("Аудио-провайдер")
         self .audio_provider_combo =QComboBox ()
 
-        video_label =QLabel ("Video")
+        video_label =QLabel ("Видео")
         file_row =QHBoxLayout ()
         file_row .setSpacing (8 )
         self .video_input =QLineEdit ()
         self .video_input .setReadOnly (True )
-        self .video_input .setPlaceholderText ("Choose video file or record from camera")
+        self .video_input .setPlaceholderText ("Выберите видеофайл или запишите с камеры")
 
-        browse_button =QPushButton ("Choose File")
+        browse_button =QPushButton ("Выбрать файл")
         browse_button .setObjectName ("SecondaryButton")
         browse_button .clicked .connect (self ._browse_video )
 
-        camera_button =QPushButton ("Record Camera")
+        camera_button =QPushButton ("Записать с камеры")
         camera_button .setObjectName ("SecondaryButton")
         camera_button .clicked .connect (self ._record_with_camera )
 
@@ -126,7 +126,7 @@ class CreateProjectDialog (QDialog ):
         file_row .addWidget (browse_button )
         file_row .addWidget (camera_button )
 
-        self .start_processing_checkbox =QCheckBox ("Start processing immediately")
+        self .start_processing_checkbox =QCheckBox ("Запустить обработку сразу")
         self .start_processing_checkbox .setChecked (True )
 
         self .error_label =QLabel ("")
@@ -140,10 +140,10 @@ class CreateProjectDialog (QDialog ):
         ok_button =self .button_box .button (QDialogButtonBox .StandardButton .Ok )
         cancel_button =self .button_box .button (QDialogButtonBox .StandardButton .Cancel )
         if ok_button :
-            ok_button .setText ("Create")
+            ok_button .setText ("Создать")
             ok_button .setObjectName ("PrimaryButton")
         if cancel_button :
-            cancel_button .setText ("Cancel")
+            cancel_button .setText ("Отмена")
             cancel_button .setObjectName ("SecondaryButton")
 
         layout .addWidget (title_label )
@@ -171,9 +171,9 @@ class CreateProjectDialog (QDialog ):
     def _browse_video (self )->None :
         file_path ,_ =QFileDialog .getOpenFileName (
         self ,
-        "Select Video",
+        "Выберите видео",
         "",
-        "Video (*.mp4 *.mov *.avi *.mkv);;All Files (*.*)",
+        "Видео (*.mp4 *.mov *.avi *.mkv);;Все файлы (*.*)",
         )
         if file_path :
             self .video_input .setText (file_path )
@@ -214,22 +214,22 @@ class CreateProjectDialog (QDialog ):
         audio_provider_raw =str (self .audio_provider_combo .currentData ()or "").strip ().lower ()
 
         if len (title )<3 :
-            self ._show_error ("Title must be at least 3 characters.")
+            self ._show_error ("Название должно содержать минимум 3 символа.")
             return 
         if scope in {"emotions_only","emotions_and_lie"}and not model_name :
-            self ._show_error ("Select an analysis model.")
+            self ._show_error ("Выберите модель анализа.")
             return 
         if not video_path :
-            self ._show_error ("Choose a video file.")
+            self ._show_error ("Выберите видеофайл.")
             return 
         if scope in {"emotions_only","emotions_and_lie"}and not detector_name :
-            self ._show_error ("Select a face detector.")
+            self ._show_error ("Выберите детектор лица.")
             return 
         if scope in {"lie_only","emotions_and_lie"}and audio_provider_raw in {"","__none__"}:
-            self ._show_error ("No compatible audio provider for this mode.")
+            self ._show_error ("Для этого режима нет подходящего аудио-провайдера.")
             return 
         if not Path (video_path ).exists ():
-            self ._show_error ("Selected video file was not found.")
+            self ._show_error ("Выбранный видеофайл не найден.")
             return 
 
         self .accept ()
@@ -266,15 +266,23 @@ class CreateProjectDialog (QDialog ):
             else :
                 providers =[item for item in self .audio_providers if item .supports_video ]
         elif normalized_mode =="audio_only":
-            providers =[item for item in self .audio_providers if item .supports_audio ]
+            providers =[
+            item 
+            for item in self .audio_providers 
+            if item .supports_audio and not item .is_video_provider 
+            ]
         else :
-            providers =[item for item in self .audio_providers if item .supports_video ]
+            providers =[
+            item 
+            for item in self .audio_providers 
+            if item .supports_video and not item .is_video_provider 
+            ]
 
         for provider in providers :
             self .audio_provider_combo .addItem (provider .title ,provider .code )
 
         if self .audio_provider_combo .count ()==0 :
-            self .audio_provider_combo .addItem ("No suitable providers","__none__")
+            self .audio_provider_combo .addItem ("Нет подходящих провайдеров","__none__")
 
         if selected_code :
             selected_index =self .audio_provider_combo .findData (selected_code )
@@ -355,10 +363,10 @@ class DashboardView (QWidget ):
 
         self .metrics_layout =QBoxLayout (QBoxLayout .Direction .LeftToRight )
         self .metrics_layout .setSpacing (10 )
-        self .total_metric =MetricCard ("Total Projects","0")
-        self .active_metric =MetricCard ("Active","0")
-        self .done_metric =MetricCard ("Completed","0")
-        self .runs_metric =MetricCard ("With Last Run","0")
+        self .total_metric =MetricCard ("Всего проектов","0")
+        self .active_metric =MetricCard ("Активные","0")
+        self .done_metric =MetricCard ("Завершенные","0")
+        self .runs_metric =MetricCard ("С последним запуском","0")
         self .metrics_layout .addWidget (self .total_metric )
         self .metrics_layout .addWidget (self .active_metric )
         self .metrics_layout .addWidget (self .done_metric )
@@ -366,9 +374,9 @@ class DashboardView (QWidget ):
         content_layout .addLayout (self .metrics_layout )
 
         projects_header =QHBoxLayout ()
-        projects_title =QLabel ("Projects")
+        projects_title =QLabel ("Проекты")
         projects_title .setObjectName ("SectionTitle")
-        projects_hint =QLabel ("Open a project to view video, charts and report")
+        projects_hint =QLabel ("Откройте проект, чтобы посмотреть видео, графики и отчет")
         projects_hint .setObjectName ("SectionHint")
         projects_header .addWidget (projects_title )
         projects_header .addStretch (1 )
@@ -378,13 +386,13 @@ class DashboardView (QWidget ):
         self .projects_grid =ResponsiveGrid (min_column_width =330 ,spacing =14 )
         content_layout .addWidget (self .projects_grid )
 
-        runs_title =QLabel ("Recent Runs")
+        runs_title =QLabel ("Последние запуски")
         runs_title .setObjectName ("SectionTitle")
         content_layout .addWidget (runs_title )
 
         self .runs_table =QTableWidget (0 ,5 )
         self .runs_table .setObjectName ("RunsTable")
-        self .runs_table .setHorizontalHeaderLabels (["Project","Status","Created","Updated","Provider"])
+        self .runs_table .setHorizontalHeaderLabels (["Проект","Статус","Создан","Обновлен","Провайдер"])
         self .runs_table .verticalHeader ().setVisible (False )
         self .runs_table .setAlternatingRowColors (False )
         self .runs_table .setSelectionBehavior (QTableWidget .SelectionBehavior .SelectRows )
@@ -420,9 +428,9 @@ class DashboardView (QWidget ):
         self .sidebar_buttons =[]
         self ._nav_buttons_by_key :dict [str ,QPushButton ]={}
         nav_data :list [tuple [str ,str ,str ,object ]]=[
-        ("projects","Projects","PR",self ._on_open_projects_clicked ),
-        ("profile","Profile","PF",self .open_profile_requested .emit ),
-        ("admin","Admin","AD",self .open_admin_requested .emit ),
+        ("projects","Проекты","ПР",self ._on_open_projects_clicked ),
+        ("profile","Профиль","ПФ",self .open_profile_requested .emit ),
+        ("admin","Админ","АД",self .open_admin_requested .emit ),
         ]
         for key ,full_text ,compact_text ,handler in nav_data :
             button =QPushButton (full_text )
@@ -438,11 +446,11 @@ class DashboardView (QWidget ):
 
         layout .addStretch (1 )
 
-        self .sidebar_user_label =QLabel ("User")
+        self .sidebar_user_label =QLabel ("Пользователь")
         self .sidebar_user_label .setStyleSheet ("font-weight: 700; color: #243760;")
         self .sidebar_role_label =QLabel ("-")
         self .sidebar_role_label .setObjectName ("SectionHint")
-        self .sidebar_logout_button =QPushButton ("Logout")
+        self .sidebar_logout_button =QPushButton ("Выйти")
         self .sidebar_logout_button .setObjectName ("SecondaryButton")
         self .sidebar_logout_button .clicked .connect (self .logout_requested .emit )
 
@@ -461,7 +469,7 @@ class DashboardView (QWidget ):
         self .header_layout =QBoxLayout (QBoxLayout .Direction .LeftToRight )
         self .header_layout .setSpacing (12 )
 
-        self .greeting_label =QLabel ("Welcome")
+        self .greeting_label =QLabel ("Добро пожаловать")
         self .greeting_label .setObjectName ("GreetingLabel")
         self .greeting_label .setWordWrap (True )
         self .header_layout .addWidget (self .greeting_label ,1 )
@@ -472,18 +480,18 @@ class DashboardView (QWidget ):
         self .actions_layout .setSpacing (8 )
 
         self .search_input =QLineEdit ()
-        self .search_input .setPlaceholderText ("Search by title or description")
+        self .search_input .setPlaceholderText ("Поиск по названию или описанию")
         self .search_input .textChanged .connect (self ._apply_filter )
         self .search_input .setMinimumWidth (250 )
 
-        self .models_label =QLabel ("Models: -")
+        self .models_label =QLabel ("Модели: -")
         self .models_label .setObjectName ("SectionHint")
 
-        self .refresh_button =QPushButton ("Refresh")
+        self .refresh_button =QPushButton ("Обновить")
         self .refresh_button .setObjectName ("SecondaryButton")
         self .refresh_button .clicked .connect (self .refresh_requested .emit )
 
-        self .create_button =QPushButton ("Create Project")
+        self .create_button =QPushButton ("Создать проект")
         self .create_button .setObjectName ("PrimaryButton")
         self .create_button .clicked .connect (self ._open_create_dialog )
 
@@ -499,9 +507,9 @@ class DashboardView (QWidget ):
     def set_models (self ,models :list [str ])->None :
         self ._models =[item .strip ()for item in models if item .strip ()]
         if self ._models :
-            self .models_label .setText (f"Models: {len (self ._models )}")
+            self .models_label .setText (f"Модели: {len (self ._models )}")
         else :
-            self .models_label .setText ("Models: unavailable")
+            self .models_label .setText ("Модели: недоступны")
 
     def set_detectors (self ,detectors :list [str ])->None :
         self ._detectors =[item .strip ()for item in detectors if item .strip ()]
@@ -515,7 +523,7 @@ class DashboardView (QWidget ):
     def _open_create_dialog (self )->None :
         if not self ._models :
             self .set_status_message (
-            "Models list is unavailable. You can still create an audio-only project.",
+            "Список моделей недоступен. Вы можете создать проект только с аудио-анализом.",
             is_error =True ,
             )
 
@@ -540,7 +548,7 @@ class DashboardView (QWidget ):
             )
 
     def set_user (self ,user :UserProfile )->None :
-        self .greeting_label .setText (f"Welcome, {user .ui_name }")
+        self .greeting_label .setText (f"Добро пожаловать, {user .ui_name }")
         self .sidebar_user_label .setText (user .ui_name )
         self .sidebar_role_label .setText (user .role )
         self .set_admin_mode (user .role =="admin")
@@ -620,9 +628,9 @@ class DashboardView (QWidget ):
             empty_layout =QVBoxLayout (empty )
             empty_layout .setContentsMargins (24 ,24 ,24 ,24 )
             empty_layout .setSpacing (6 )
-            title =QLabel ("No projects found")
+            title =QLabel ("Проекты не найдены")
             title .setObjectName ("ProjectTitle")
-            hint =QLabel ("Change the filter or create a new project.")
+            hint =QLabel ("Измените фильтр или создайте новый проект.")
             hint .setObjectName ("SectionHint")
             empty_layout .addWidget (title )
             empty_layout .addWidget (hint )
@@ -652,7 +660,7 @@ class DashboardView (QWidget ):
         self .runs_table .setRowCount (len (rows ))
         for row_index ,(project ,run )in enumerate (rows ):
             status_value =run .status if run else "-"
-            status_text =run_status_label (status_value )if run else "No runs"
+            status_text =run_status_label (status_value )if run else "Нет запусков"
             status_item =QTableWidgetItem (status_text )
             if run :
                 status_color =self ._status_color (run .status )

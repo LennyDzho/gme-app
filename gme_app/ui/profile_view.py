@@ -76,14 +76,14 @@ class ProfileView(QWidget):
         profile_title.setObjectName("ProjectTitle")
         profile_layout.addWidget(profile_title)
 
-        profile_layout.addWidget(QLabel("Display name"))
+        profile_layout.addWidget(QLabel("Отображаемое имя"))
         self.display_name_input = QLineEdit()
         self.display_name_input.setPlaceholderText("Как отображать ваше имя")
         profile_layout.addWidget(self.display_name_input)
 
-        profile_layout.addWidget(QLabel("Email"))
+        profile_layout.addWidget(QLabel("Эл. почта"))
         self.email_input = QLineEdit()
-        self.email_input.setPlaceholderText("user@example.com")
+        self.email_input.setPlaceholderText("name@example.com")
         profile_layout.addWidget(self.email_input)
 
         self.save_profile_button = QPushButton("Сохранить профиль")

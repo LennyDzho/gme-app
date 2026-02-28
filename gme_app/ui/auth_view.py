@@ -152,9 +152,9 @@ class AuthView(QWidget):
         self.register_login_input = QLineEdit()
         self.register_login_input.setPlaceholderText("ivan")
 
-        email_label = QLabel("Email (необязательно)")
+        email_label = QLabel("Эл. почта (необязательно)")
         self.register_email_input = QLineEdit()
-        self.register_email_input.setPlaceholderText("your@email.com")
+        self.register_email_input.setPlaceholderText("name@example.com")
 
         password_label = QLabel("Пароль")
         self.register_password_input = QLineEdit()

@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path 
 from typing import Any 
 
-from PyQt6 .QtCore import QThreadPool 
+from PyQt6 .QtCore import QThreadPool ,QTimer 
 from PyQt6 .QtWidgets import QMainWindow ,QStackedWidget 
 
 from gme_app .api .client import ApiError ,GMEManagementClient 
@@ -52,10 +52,17 @@ class MainWindow (QMainWindow ):
         self ._available_models :list [str ]=[]
         self ._available_detectors :list [str ]=["haar","mtcnn","retinaface","scrfd"]
         self ._available_audio_providers :list [AudioProvider ]=[]
+        self ._is_loading_audio_providers =False 
         self ._admin_users_query :str =""
         self ._admin_users_role :str |None =None 
         self ._admin_users_active :bool |None =None 
         self ._admin_projects_query :str =""
+        self._is_refreshing_dashboard = False
+        self._is_refreshing_admin = False
+        self._is_refreshing_project = False
+        self._auto_refresh_timer = QTimer(self)
+        self._auto_refresh_timer.setInterval(10_000)
+        self._auto_refresh_timer.timeout.connect(self._on_auto_refresh_tick)
 
         self .setWindowTitle ("GME App")
         self .setMinimumSize (980 ,680 )
@@ -113,6 +120,7 @@ class MainWindow (QMainWindow ):
         self .project_view .add_member_requested .connect (self ._on_add_member_requested )
         self .project_view .change_member_role_requested .connect (self ._on_change_member_role_requested )
         self .project_view .remove_member_requested .connect (self ._on_remove_member_requested )
+        self .project_view .audio_providers_requested .connect (self ._on_project_audio_providers_requested )
 
     def _run_background (
     self ,
@@ -146,7 +154,7 @@ class MainWindow (QMainWindow ):
             return 
 
         self .auth_view .prefill_login (persisted .user_login )
-        self .auth_view .set_busy (True ,"Restoring session...")
+        self .auth_view .set_busy (True ,"Восстанавливаем сессию...")
         self .client .set_session_token (persisted .session_token )
 
         def task ()->UserProfile :
@@ -160,12 +168,13 @@ class MainWindow (QMainWindow ):
             self .session_store .clear ()
             self .client .clear_session_token ()
             self .auth_view .set_busy (False )
-            self .auth_view .show_info ("Saved session expired. Please sign in again.")
+            self .auth_view .show_info ("Сохраненная сессия истекла. Войдите снова.")
             self ._show_auth ()
 
         self ._run_background (task ,on_result =on_success ,on_error =on_error )
 
     def _show_auth (self )->None :
+        self._stop_auto_refresh()
         self .stack .setCurrentWidget (self .auth_view )
 
     def _show_dashboard (self )->None :
@@ -186,7 +195,7 @@ class MainWindow (QMainWindow ):
             self ._show_auth ()
             return 
         if self .current_user .role !="admin":
-            self .dashboard_view .set_status_message ("Admin access is required.",is_error =True )
+            self .dashboard_view .set_status_message ("Требуются права администратора.",is_error =True )
             self ._show_dashboard ()
             return 
         self .dashboard_view .set_active_nav ("admin")
@@ -196,8 +205,40 @@ class MainWindow (QMainWindow ):
     def _show_project (self )->None :
         self .stack .setCurrentWidget (self .project_view )
 
+    def _start_auto_refresh(self) -> None:
+        if self.current_user is None:
+            return
+        if not self._auto_refresh_timer.isActive():
+            self._auto_refresh_timer.start()
+
+    def _stop_auto_refresh(self) -> None:
+        if self._auto_refresh_timer.isActive():
+            self._auto_refresh_timer.stop()
+
+    def _on_auto_refresh_tick(self) -> None:
+        if self.current_user is None:
+            return
+
+        current_widget = self.stack.currentWidget()
+        if current_widget is self.project_view:
+            if self.current_project_id:
+                self._refresh_project(
+                    project_id=self.current_project_id,
+                    preferred_run_id=self.current_project_run_id or "",
+                    show_status=False,
+                    force=False,
+                )
+            return
+
+        if current_widget is self.dashboard_view:
+            self.refresh_dashboard(show_status=False, force=False)
+            return
+
+        if current_widget is self.admin_view and self.current_user.role == "admin":
+            self.refresh_admin_panel(show_status=False, force=False)
+
     def _on_login_submitted (self ,login :str ,password :str ,remember :bool )->None :
-        self .auth_view .set_busy (True ,"Signing in...")
+        self .auth_view .set_busy (True ,"Выполняем вход...")
 
         def task ()->dict [str ,Any ]:
             self .client .login (login =login ,password =password )
@@ -222,7 +263,7 @@ class MainWindow (QMainWindow ):
         )
 
     def _on_register_submitted (self ,login :str ,email :str ,password :str )->None :
-        self .auth_view .set_busy (True ,"Creating account...")
+        self .auth_view .set_busy (True ,"Создаем аккаунт...")
 
         def task ()->dict [str ,Any ]:
             self .client .register (login =login ,password =password ,email =email or None )
@@ -260,172 +301,224 @@ class MainWindow (QMainWindow ):
         else :
             self .session_store .clear ()
 
+        self._start_auto_refresh()
         self ._show_dashboard ()
         self .refresh_dashboard ()
 
-    def refresh_dashboard (self )->None :
-        if self .current_user is None :
+    def _load_audio_providers_on_demand (self ,*,show_error_on_project :bool =False )->None :
+        if self ._is_loading_audio_providers :
             return 
-        self .dashboard_view .set_loading (True ,"Refreshing dashboard...")
+        self ._is_loading_audio_providers =True 
 
-        def task ()->dict [str ,Any ]:
-            models :list [str ]=[]
-            detectors :list [str ]=[]
-            audio_providers :list [AudioProvider ]=[]
-            audio_providers_error :str |None =None 
-            try :
-                models =self .client .get_processing_models ()
-            except ApiError :
-                models =[]
-            try :
-                detectors =self .client .get_face_detectors ()
-            except ApiError :
-                detectors =[]
-            try :
-                audio_providers =self .client .get_audio_providers ()
-            except ApiError as exc :
-                audio_providers =[]
-                audio_providers_error =exc .message 
+        def task ()->list [AudioProvider ]:
+            return self .client .get_audio_providers ()
 
-            projects_page =self .client .list_projects (limit =100 ,offset =0 )
-            projects =projects_page .items 
-            runs :list [tuple [Project ,ProcessingRun |None ]]=[]
-
-            fetch_runs_limit =min (30 ,len (projects ))
-            for index ,project in enumerate (projects ):
-                latest_run :ProcessingRun |None =None 
-                if index <fetch_runs_limit :
-                    try :
-                        run_page =self .client .list_processing_runs (
-                        project_id =str (project .id ),
-                        limit =1 ,
-                        offset =0 ,
-                        )
-                    except ApiError :
-                        latest_run =None 
-                    else :
-                        latest_run =run_page .items [0 ]if run_page .items else None 
-                        if latest_run is not None and latest_run .status in {"scheduled","pending","running"}:
-                            try :
-                                self .client .sync_processing_run (
-                                project_id =str (project .id ),
-                                run_id =str (latest_run .id ),
-                                )
-                                run_page =self .client .list_processing_runs (
-                                project_id =str (project .id ),
-                                limit =1 ,
-                                offset =0 ,
-                                )
-                                latest_run =run_page .items [0 ]if run_page .items else latest_run 
-                            except ApiError :
-                                pass 
-                runs .append ((project ,latest_run ))
-
-            return {
-            "models":models ,
-            "detectors":detectors ,
-            "audio_providers":audio_providers ,
-            "audio_providers_error":audio_providers_error ,
-            "projects":projects ,
-            "runs":runs ,
-            }
-
-        def on_success (result :dict [str ,Any ])->None :
-            fetched_models =[str (item )for item in result .get ("models",[])if str (item ).strip ()]
-            if fetched_models :
-                self ._available_models =fetched_models 
-            fetched_detectors =[str (item )for item in result .get ("detectors",[])if str (item ).strip ()]
-            if fetched_detectors :
-                self ._available_detectors =fetched_detectors 
-            fetched_audio_providers =[
-            item for item in result .get ("audio_providers",[])if isinstance (item ,AudioProvider )and item .code 
+        def on_success (providers :list [AudioProvider ])->None :
+            normalized =[
+            item 
+            for item in providers 
+            if isinstance (item ,AudioProvider )and item .code 
             ]
-            if fetched_audio_providers :
-                self ._available_audio_providers =fetched_audio_providers 
-
-            self .dashboard_view .set_models (self ._available_models )
-            self .dashboard_view .set_detectors (self ._available_detectors )
+            if normalized :
+                self ._available_audio_providers =normalized 
             self .dashboard_view .set_audio_providers (self ._available_audio_providers )
-            self .project_view .set_models (self ._available_models )
-            self .project_view .set_detectors (self ._available_detectors )
-            self .project_view .set_audio_providers (self ._available_audio_providers )
-            self .dashboard_view .set_dashboard_data (
-            projects =list (result ["projects"]),
-            runs =list (result ["runs"]),
+            self .project_view .set_audio_providers (
+            self ._available_audio_providers ,
+            loaded_from_server =True ,
             )
-            self .dashboard_view .set_status_message (
-            f"Data refreshed: {datetime .now ().strftime ('%H:%M:%S')}",
-            is_error =False ,
-            )
-            if result .get ("audio_providers_error"):
-                self .dashboard_view .set_status_message (
-                f"Audio providers failed to load: {result ['audio_providers_error']}",
+
+        def on_error (error :Exception )->None :
+            self .project_view .mark_audio_providers_request_failed ()
+            if isinstance (error ,ApiError )and error .status_code ==401 :
+                self ._handle_session_expired ()
+                return 
+            if show_error_on_project :
+                self .project_view .set_status_message (
+                f"Не удалось загрузить аудио-провайдеры: {self ._format_error (error )}",
                 is_error =True ,
                 )
 
-        def on_error (error :Exception )->None :
-            if isinstance (error ,ApiError )and error .status_code ==401 :
-                self ._handle_session_expired ()
-                return 
-            self .dashboard_view .set_status_message (self ._format_error (error ),is_error =True )
+        def on_finished ()->None :
+            self ._is_loading_audio_providers =False 
 
         self ._run_background (
         task ,
         on_result =on_success ,
         on_error =on_error ,
-        on_finished =lambda :self .dashboard_view .set_loading (False ),
+        on_finished =on_finished ,
         )
 
-    def refresh_admin_panel (self )->None :
-        if self .current_user is None :
+    def _on_project_audio_providers_requested (self ,lie_mode :str )->None :
+        normalized_mode =str (lie_mode or "").strip ().lower ()or "audio_only"
+        if normalized_mode =="video_only":
             return 
-        if self .current_user .role !="admin":
-            self .admin_view .set_status_message ("Admin access is required.",is_error =True )
-            return 
+        self ._load_audio_providers_on_demand (show_error_on_project =True )
 
-        self .admin_view .set_loading (True ,"Loading admin data...")
+    def refresh_dashboard(self, *, show_status: bool = True, force: bool = False) -> None:
+        if self.current_user is None:
+            return
+        if self._is_refreshing_dashboard and not force:
+            return
+        self._is_refreshing_dashboard = True
 
-        def task ()->dict [str ,Any ]:
-            users_page =self .client .admin_list_users (
-            q =self ._admin_users_query or None ,
-            role =self ._admin_users_role ,
-            is_active =self ._admin_users_active ,
-            limit =200 ,
-            offset =0 ,
-            )
-            projects_page =self .client .list_projects (
-            q =self ._admin_projects_query or None ,
-            limit =200 ,
-            offset =0 ,
-            )
+        if show_status:
+            self.dashboard_view.set_loading(True, "Обновляем данные панели...")
+
+        def task() -> dict[str, Any]:
+            models: list[str] = []
+            detectors: list[str] = []
+            try:
+                models = self.client.get_processing_models()
+            except ApiError:
+                models = []
+            try:
+                detectors = self.client.get_face_detectors()
+            except ApiError:
+                detectors = []
+
+            projects_page = self.client.list_projects(limit=100, offset=0)
+            projects = projects_page.items
+            runs: list[tuple[Project, ProcessingRun | None]] = []
+
+            fetch_runs_limit = min(30, len(projects))
+            for index, project in enumerate(projects):
+                latest_run: ProcessingRun | None = None
+                if index < fetch_runs_limit:
+                    try:
+                        run_page = self.client.list_processing_runs(
+                            project_id=str(project.id),
+                            limit=1,
+                            offset=0,
+                        )
+                    except ApiError:
+                        latest_run = None
+                    else:
+                        latest_run = run_page.items[0] if run_page.items else None
+                        if latest_run is not None and latest_run.status in {"scheduled", "pending", "running"}:
+                            try:
+                                self.client.sync_processing_run(
+                                    project_id=str(project.id),
+                                    run_id=str(latest_run.id),
+                                )
+                                run_page = self.client.list_processing_runs(
+                                    project_id=str(project.id),
+                                    limit=1,
+                                    offset=0,
+                                )
+                                latest_run = run_page.items[0] if run_page.items else latest_run
+                            except ApiError:
+                                pass
+                runs.append((project, latest_run))
+
             return {
-            "users":users_page .items ,
-            "projects":projects_page .items ,
+                "models": models,
+                "detectors": detectors,
+                "projects": projects,
+                "runs": runs,
             }
 
-        def on_success (result :dict [str ,Any ])->None :
-            self .admin_view .set_users (list (result .get ("users",[])))
-            self .admin_view .set_projects (list (result .get ("projects",[])))
-            self .admin_view .set_status_message (
-            f"Admin data refreshed: {datetime .now ().strftime ('%H:%M:%S')}",
-            is_error =False ,
+        def on_success(result: dict[str, Any]) -> None:
+            fetched_models = [str(item) for item in result.get("models", []) if str(item).strip()]
+            if fetched_models:
+                self._available_models = fetched_models
+            fetched_detectors = [str(item) for item in result.get("detectors", []) if str(item).strip()]
+            if fetched_detectors:
+                self._available_detectors = fetched_detectors
+
+            self.dashboard_view.set_models(self._available_models)
+            self.dashboard_view.set_detectors(self._available_detectors)
+            self.dashboard_view.set_audio_providers(self._available_audio_providers)
+            self.project_view.set_models(self._available_models)
+            self.project_view.set_detectors(self._available_detectors)
+            self.project_view.set_audio_providers(self._available_audio_providers)
+            self.dashboard_view.set_dashboard_data(
+                projects=list(result["projects"]),
+                runs=list(result["runs"]),
             )
 
-        def on_error (error :Exception )->None :
-            if isinstance (error ,ApiError )and error .status_code ==401 :
-                self ._handle_session_expired ()
-                return 
-            self .admin_view .set_status_message (self ._format_error (error ),is_error =True )
+            if show_status:
+                self.dashboard_view.set_status_message(
+                    f"Данные обновлены: {datetime.now().strftime('%H:%M:%S')}",
+                    is_error=False,
+                )
+        def on_error(error: Exception) -> None:
+            if isinstance(error, ApiError) and error.status_code == 401:
+                self._handle_session_expired()
+                return
+            self.dashboard_view.set_status_message(self._format_error(error), is_error=True)
 
-        self ._run_background (
-        task ,
-        on_result =on_success ,
-        on_error =on_error ,
-        on_finished =lambda :self .admin_view .set_loading (False ),
+        def on_finished() -> None:
+            self._is_refreshing_dashboard = False
+            if show_status:
+                self.dashboard_view.set_loading(False)
+
+        self._run_background(
+            task,
+            on_result=on_success,
+            on_error=on_error,
+            on_finished=on_finished,
+        )
+
+    def refresh_admin_panel(self, *, show_status: bool = True, force: bool = False) -> None:
+        if self.current_user is None:
+            return
+        if self.current_user.role != "admin":
+            self.admin_view.set_status_message("Требуются права администратора.", is_error=True)
+            return
+        if self._is_refreshing_admin and not force:
+            return
+        self._is_refreshing_admin = True
+
+        if show_status:
+            self.admin_view.set_loading(True, "Загружаем данные админ-панели...")
+
+        def task() -> dict[str, Any]:
+            users_page = self.client.admin_list_users(
+                q=self._admin_users_query or None,
+                role=self._admin_users_role,
+                is_active=self._admin_users_active,
+                limit=200,
+                offset=0,
+            )
+            projects_page = self.client.list_projects(
+                q=self._admin_projects_query or None,
+                limit=200,
+                offset=0,
+            )
+            return {
+                "users": users_page.items,
+                "projects": projects_page.items,
+            }
+
+        def on_success(result: dict[str, Any]) -> None:
+            self.admin_view.set_users(list(result.get("users", [])))
+            self.admin_view.set_projects(list(result.get("projects", [])))
+            if show_status:
+                self.admin_view.set_status_message(
+                    f"Данные админ-панели обновлены: {datetime.now().strftime('%H:%M:%S')}",
+                    is_error=False,
+                )
+
+        def on_error(error: Exception) -> None:
+            if isinstance(error, ApiError) and error.status_code == 401:
+                self._handle_session_expired()
+                return
+            self.admin_view.set_status_message(self._format_error(error), is_error=True)
+
+        def on_finished() -> None:
+            self._is_refreshing_admin = False
+            if show_status:
+                self.admin_view.set_loading(False)
+
+        self._run_background(
+            task,
+            on_result=on_success,
+            on_error=on_error,
+            on_finished=on_finished,
         )
 
     def _on_profile_save_requested (self ,email :object ,display_name :object )->None :
-        self .profile_view .set_loading (True ,"Saving profile...")
+        self .profile_view .set_loading (True ,"Сохраняем профиль...")
 
         def task ()->UserProfile :
             return self .client .update_me (
@@ -438,7 +531,7 @@ class MainWindow (QMainWindow ):
             self .dashboard_view .set_user (user )
             self .profile_view .set_user (user )
             self .project_view .set_user (user )
-            self .profile_view .set_status_message ("Profile updated.",is_error =False )
+            self .profile_view .set_status_message ("Профиль обновлен.",is_error =False )
 
         def on_error (error :Exception )->None :
             if isinstance (error ,ApiError )and error .status_code ==401 :
@@ -454,7 +547,7 @@ class MainWindow (QMainWindow ):
         )
 
     def _on_change_password_requested (self ,old_password :str ,new_password :str ,revoke_other :bool )->None :
-        self .profile_view .set_loading (True ,"Changing password...")
+        self .profile_view .set_loading (True ,"Меняем пароль...")
 
         def task ()->None :
             self .client .change_my_password (
@@ -465,7 +558,7 @@ class MainWindow (QMainWindow ):
 
         def on_success (_ :Any )->None :
             self .profile_view .clear_password_inputs ()
-            self .profile_view .set_status_message ("Password updated.",is_error =False )
+            self .profile_view .set_status_message ("Пароль обновлен.",is_error =False )
 
         def on_error (error :Exception )->None :
             if isinstance (error ,ApiError )and error .status_code ==401 :
@@ -491,13 +584,13 @@ class MainWindow (QMainWindow ):
         self .refresh_admin_panel ()
 
     def _on_admin_change_user_role_requested (self ,user_id :str ,role :str )->None :
-        self .admin_view .set_loading (True ,"Updating user role...")
+        self .admin_view .set_loading (True ,"Обновляем роль пользователя...")
 
         def task ()->UserProfile :
             return self .client .admin_patch_user_role (user_id =user_id ,role =role )
 
         def on_success (_ :UserProfile )->None :
-            self .admin_view .set_status_message ("User role updated.",is_error =False )
+            self .admin_view .set_status_message ("Роль пользователя обновлена.",is_error =False )
             self .refresh_admin_panel ()
 
         def on_error (error :Exception )->None :
@@ -514,13 +607,13 @@ class MainWindow (QMainWindow ):
         )
 
     def _on_admin_change_user_active_requested (self ,user_id :str ,is_active :bool )->None :
-        self .admin_view .set_loading (True ,"Updating user status...")
+        self .admin_view .set_loading (True ,"Обновляем статус пользователя...")
 
         def task ()->UserProfile :
             return self .client .admin_patch_user_active (user_id =user_id ,is_active =is_active )
 
         def on_success (_ :UserProfile )->None :
-            message ="User unbanned."if is_active else "User banned."
+            message ="Пользователь разблокирован."if is_active else "Пользователь заблокирован."
             self .admin_view .set_status_message (message ,is_error =False )
             self .refresh_admin_panel ()
 
@@ -538,13 +631,13 @@ class MainWindow (QMainWindow ):
         )
 
     def _on_admin_delete_project_requested (self ,project_id :str )->None :
-        self .admin_view .set_loading (True ,"Deleting project...")
+        self .admin_view .set_loading (True ,"Удаляем проект...")
 
         def task ()->None :
             self .client .delete_project (project_id =project_id )
 
         def on_success (_ :Any )->None :
-            self .admin_view .set_status_message ("Project deleted.",is_error =False )
+            self .admin_view .set_status_message ("Проект удален.",is_error =False )
             self .refresh_admin_panel ()
             self .refresh_dashboard ()
 
@@ -572,7 +665,7 @@ class MainWindow (QMainWindow ):
     processing_mode :str ,
     audio_provider :str ,
     )->None :
-        self .dashboard_view .set_loading (True ,"Creating project...")
+        self .dashboard_view .set_loading (True ,"Создаем проект...")
 
         def task ()->dict [str ,Any ]:
             payload =self .client .create_project (
@@ -588,7 +681,7 @@ class MainWindow (QMainWindow ):
             return {"payload":payload }
 
         def on_success (result :dict [str ,Any ])->None :
-            self .dashboard_view .set_status_message ("Project created.",is_error =False )
+            self .dashboard_view .set_status_message ("Проект создан.",is_error =False )
             self .refresh_dashboard ()
 
         def on_error (error :Exception )->None :
@@ -612,7 +705,7 @@ class MainWindow (QMainWindow ):
     processing_mode :str ,
     audio_provider :str ,
     )->None :
-        self .project_view .set_loading (True ,"Starting processing...")
+        self .project_view .set_loading (True ,"Запускаем обработку...")
 
         def task ()->dict [str ,Any ]:
             return self .client .start_processing (
@@ -624,7 +717,7 @@ class MainWindow (QMainWindow ):
             )
 
         def on_success (_ :dict [str ,Any ])->None :
-            self .project_view .set_status_message ("Processing started.",is_error =False )
+            self .project_view .set_status_message ("Обработка запущена.",is_error =False )
             self .current_project_run_id =None 
             self ._refresh_project (project_id =project_id ,preferred_run_id ="")
             self .refresh_dashboard ()
@@ -643,13 +736,13 @@ class MainWindow (QMainWindow ):
         )
 
     def _on_cancel_processing (self ,project_id :str ,run_id :str )->None :
-        self .project_view .set_loading (True ,"Cancelling processing...")
+        self .project_view .set_loading (True ,"Отменяем обработку...")
 
         def task ()->dict [str ,Any ]:
             return self .client .cancel_processing_run (project_id =project_id ,run_id =run_id )
 
         def on_success (_ :dict [str ,Any ])->None :
-            self .project_view .set_status_message ("Processing run cancelled.",is_error =False )
+            self .project_view .set_status_message ("Запуск обработки отменен.",is_error =False )
             self .current_project_run_id =run_id 
             self ._refresh_project (project_id =project_id ,preferred_run_id =run_id )
             self .refresh_dashboard ()
@@ -668,7 +761,7 @@ class MainWindow (QMainWindow ):
         )
 
     def _on_delete_project (self ,project_id :str )->None :
-        self .project_view .set_loading (True ,"Deleting project...")
+        self .project_view .set_loading (True ,"Удаляем проект...")
 
         def task ()->None :
             self .client .delete_project (project_id =project_id )
@@ -677,7 +770,7 @@ class MainWindow (QMainWindow ):
             self .current_project_id =None 
             self .current_project_run_id =None 
             self ._show_dashboard ()
-            self .dashboard_view .set_status_message ("Project deleted.",is_error =False )
+            self .dashboard_view .set_status_message ("Проект удален.",is_error =False )
             self .refresh_dashboard ()
 
         def on_error (error :Exception )->None :
@@ -694,10 +787,10 @@ class MainWindow (QMainWindow ):
         )
 
     def _on_logout (self )->None :
-        self .dashboard_view .set_loading (True ,"Logging out...")
-        self .profile_view .set_loading (True ,"Logging out...")
-        self .admin_view .set_loading (True ,"Logging out...")
-        self .project_view .set_loading (True ,"Logging out...")
+        self .dashboard_view .set_loading (True ,"Выходим из системы...")
+        self .profile_view .set_loading (True ,"Выходим из системы...")
+        self .admin_view .set_loading (True ,"Выходим из системы...")
+        self .project_view .set_loading (True ,"Выходим из системы...")
 
         def task ()->None :
             try :
@@ -708,7 +801,7 @@ class MainWindow (QMainWindow ):
 
         def on_success (_ :Any )->None :
             self ._reset_session ()
-            self .auth_view .show_info ("You have been logged out.")
+            self .auth_view .show_info ("Вы вышли из системы.")
             self ._show_auth ()
 
         def on_error (error :Exception )->None :
@@ -752,7 +845,7 @@ class MainWindow (QMainWindow ):
         self ._refresh_project (project_id =project_id ,preferred_run_id =run_id ,show_status =False )
 
     def _on_add_member_requested (self ,project_id :str ,user_login :str ,member_role :str )->None :
-        self .project_view .set_loading (True ,"Adding member...")
+        self .project_view .set_loading (True ,"Добавляем участника...")
 
         def task ()->None :
             self .client .add_project_member (
@@ -762,7 +855,7 @@ class MainWindow (QMainWindow ):
             )
 
         def on_success (_ :Any )->None :
-            self .project_view .set_status_message ("Member added.",is_error =False )
+            self .project_view .set_status_message ("Участник добавлен.",is_error =False )
             self ._refresh_project (project_id =project_id ,preferred_run_id =self .current_project_run_id or "")
             self .refresh_dashboard ()
 
@@ -780,7 +873,7 @@ class MainWindow (QMainWindow ):
         )
 
     def _on_change_member_role_requested (self ,project_id :str ,user_id :str ,member_role :str )->None :
-        self .project_view .set_loading (True ,"Updating member role...")
+        self .project_view .set_loading (True ,"Обновляем роль участника...")
 
         def task ()->None :
             self .client .update_project_member_role (
@@ -790,7 +883,7 @@ class MainWindow (QMainWindow ):
             )
 
         def on_success (_ :Any )->None :
-            self .project_view .set_status_message ("Member role updated.",is_error =False )
+            self .project_view .set_status_message ("Роль участника обновлена.",is_error =False )
             self ._refresh_project (project_id =project_id ,preferred_run_id =self .current_project_run_id or "")
 
         def on_error (error :Exception )->None :
@@ -807,13 +900,13 @@ class MainWindow (QMainWindow ):
         )
 
     def _on_remove_member_requested (self ,project_id :str ,user_id :str )->None :
-        self .project_view .set_loading (True ,"Removing member...")
+        self .project_view .set_loading (True ,"Удаляем участника...")
 
         def task ()->None :
             self .client .remove_project_member (project_id =project_id ,user_id =user_id )
 
         def on_success (_ :Any )->None :
-            self .project_view .set_status_message ("Member removed.",is_error =False )
+            self .project_view .set_status_message ("Участник удален.",is_error =False )
             self ._refresh_project (project_id =project_id ,preferred_run_id =self .current_project_run_id or "")
             self .refresh_dashboard ()
 
@@ -836,10 +929,14 @@ class MainWindow (QMainWindow ):
     project_id :str ,
     preferred_run_id :str ,
     show_status :bool =True ,
+    force: bool = False,
     )->None :
+        if self._is_refreshing_project and not force:
+            return
+        self._is_refreshing_project = True
         self .current_project_id =project_id 
         if show_status :
-            self .project_view .set_loading (True ,"Loading project data...")
+            self .project_view .set_loading (True ,"Загружаем данные проекта...")
 
         def task ()->dict [str ,Any ]:
             project =self .client .get_project (project_id =project_id )
@@ -940,7 +1037,7 @@ class MainWindow (QMainWindow ):
             )
             if show_status :
                 self .project_view .set_status_message (
-                f"Project data refreshed: {datetime .now ().strftime ('%H:%M:%S')}",
+                f"Данные проекта обновлены: {datetime .now ().strftime ('%H:%M:%S')}",
                 is_error =False ,
                 )
 
@@ -950,11 +1047,16 @@ class MainWindow (QMainWindow ):
                 return 
             self .project_view .set_status_message (self ._format_error (error ),is_error =True )
 
+        def on_finished() -> None:
+            self._is_refreshing_project = False
+            if show_status:
+                self.project_view.set_loading(False)
+
         self ._run_background (
         task ,
         on_result =on_success ,
         on_error =on_error ,
-        on_finished =lambda :self .project_view .set_loading (False )if show_status else None ,
+        on_finished =on_finished ,
         )
 
     def _resolve_selected_run_id (self ,runs :list [ProcessingRun ],*,preferred_run_id :str )->str |None :
@@ -1303,16 +1405,22 @@ class MainWindow (QMainWindow ):
 
     def _handle_session_expired (self )->None :
         self ._reset_session ()
-        self .auth_view .show_info ("Session expired. Please sign in again.")
+        self .auth_view .show_info ("Сессия истекла. Войдите снова.")
         self ._show_auth ()
 
     def _reset_session (self )->None :
+        self._stop_auto_refresh()
         self .current_user =None 
         self .current_project_id =None 
         self .current_project_run_id =None 
+        self._is_refreshing_dashboard = False
+        self._is_refreshing_admin = False
+        self._is_refreshing_project = False
         self ._available_models =[]
         self ._available_detectors =["haar","mtcnn","retinaface","scrfd"]
         self ._available_audio_providers =[]
+        self ._is_loading_audio_providers =False 
+        self .project_view .reset_audio_providers_state ()
         self ._admin_users_query =""
         self ._admin_users_role =None 
         self ._admin_users_active =None 
@@ -1323,4 +1431,6 @@ class MainWindow (QMainWindow ):
     def _format_error (self ,error :Exception )->str :
         if isinstance (error ,ApiError ):
             return error .message 
-        return f"Unknown error: {error }"
+        return f"Неизвестная ошибка: {error }"
+
+

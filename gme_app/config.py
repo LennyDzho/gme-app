@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
 
+from dotenv import load_dotenv
 from PyQt6.QtCore import QStandardPaths
 
 DEFAULT_API_BASE_URL = "http://localhost:8001/api/v1"
@@ -62,7 +64,20 @@ def _resolve_app_data_dir() -> Path:
     return path
 
 
+def _load_env_file() -> None:
+    env_candidates = [Path.cwd() / ".env"]
+    if getattr(sys, "frozen", False):
+        env_candidates.append(Path(sys.executable).resolve().parent / ".env")
+    env_candidates.append(Path(__file__).resolve().parents[1] / ".env")
+
+    for env_path in env_candidates:
+        if env_path.is_file():
+            load_dotenv(env_path, override=False)
+            break
+
+
 def load_config() -> AppConfig:
+    _load_env_file()
     api_base_url = _normalize_api_base_url(os.getenv("GME_MANAGEMENT_URL", DEFAULT_API_BASE_URL))
     video_service_base_url = _normalize_service_base_url(
         os.getenv("GME_VIDEO_SERVICE_URL", DEFAULT_VIDEO_SERVICE_BASE_URL),

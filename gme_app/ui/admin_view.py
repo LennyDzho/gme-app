@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
 )
 
 from gme_app.models import Project, UserProfile, format_datetime
+from gme_app.ui.widgets import project_status_label
 
 ROLE_ITEMS: tuple[tuple[str, str], ...] = (
     ("Администратор", "admin"),
@@ -96,7 +97,7 @@ class AdminView(QWidget):
         users_filter_row.setSpacing(8)
 
         self.user_search_input = QLineEdit()
-        self.user_search_input.setPlaceholderText("Поиск: логин или email")
+        self.user_search_input.setPlaceholderText("Поиск: логин или эл. почта")
         users_filter_row.addWidget(self.user_search_input, 1)
 
         self.user_role_filter = QComboBox()
@@ -121,7 +122,7 @@ class AdminView(QWidget):
         self.users_table = QTableWidget(0, 7)
         self.users_table.setObjectName("RunsTable")
         self.users_table.setHorizontalHeaderLabels(
-            ["Логин", "Display", "Email", "Роль", "Статус", "Создан", "Действия"]
+            ["Логин", "Имя", "Эл. почта", "Роль", "Статус", "Создан", "Действия"]
         )
         self.users_table.verticalHeader().setVisible(False)
         self.users_table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
@@ -268,7 +269,7 @@ class AdminView(QWidget):
         self.projects_table.setRowCount(len(self._projects))
         for row, project in enumerate(self._projects):
             self.projects_table.setItem(row, 0, QTableWidgetItem(project.title))
-            self.projects_table.setItem(row, 1, QTableWidgetItem(project.status))
+            self.projects_table.setItem(row, 1, QTableWidgetItem(project_status_label(project.status)))
             self.projects_table.setItem(row, 2, QTableWidgetItem(str(project.creator_id)))
             self.projects_table.setItem(row, 3, QTableWidgetItem(format_datetime(project.updated_at)))
 

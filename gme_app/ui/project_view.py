@@ -274,6 +274,9 @@ class EmotionTimelineWidget(QWidget):
         self._selected_time = None
         self.update()
 
+    def visible_series(self) -> list[str]:
+        return list(self._emotions)
+
     def render_to_pixmap(self) -> QPixmap:
         pixmap = QPixmap(self.size())
         pixmap.fill(QColor("#ffffff"))
@@ -389,6 +392,10 @@ class MetricTimelineWidget(QWidget):
         self._selected_time: float | None = None
         self._plot_rect = QRect()
 
+    @staticmethod
+    def line_color() -> QColor:
+        return QColor("#2563eb")
+
     def set_points(self, points: list[dict[str, Any]]) -> None:
         normalized: list[tuple[float, float]] = []
         for item in points:
@@ -474,7 +481,7 @@ class MetricTimelineWidget(QWidget):
             y = int(self._plot_rect.bottom() - self._plot_rect.height() * y_ratio)
             chart_points.append((x, y))
 
-        painter.setPen(QPen(QColor("#2563eb"), 2))
+        painter.setPen(QPen(self.line_color(), 2))
         if len(chart_points) == 1:
             painter.drawPoint(chart_points[0][0], chart_points[0][1])
         else:
@@ -601,6 +608,34 @@ class CombinedLieTimelineWidget(QWidget):
         if show_video is not None:
             self._show_video = bool(show_video)
         self.update()
+
+    def visible_series(self) -> list[tuple[str, QColor, str]]:
+        items: list[tuple[str, QColor, str]] = []
+        if self._show_combined:
+            items.append(
+                (
+                    "Объединенный риск",
+                    COMBINED_SERIES_COLORS["combined"],
+                    "Интегральная оценка риска лжи (0.6 * аудио + 0.4 * видео).",
+                )
+            )
+        if self._has_audio and self._show_audio:
+            items.append(
+                (
+                    "Аудио-риск",
+                    COMBINED_SERIES_COLORS["audio"],
+                    "Оценка риска лжи, вычисленная по речевым признакам.",
+                )
+            )
+        if self._has_video and self._show_video:
+            items.append(
+                (
+                    "Видео-риск",
+                    COMBINED_SERIES_COLORS["video"],
+                    "Оценка риска лжи, вычисленная по мимике и динамике лица.",
+                )
+            )
+        return items
 
     def paintEvent(self, event) -> None:  # type: ignore[override]
         painter = QPainter(self)
@@ -793,6 +828,7 @@ class ProjectView(QWidget):
     add_member_requested = pyqtSignal(str, str, str)
     change_member_role_requested = pyqtSignal(str, str, str)
     remove_member_requested = pyqtSignal(str, str)
+    audio_providers_requested = pyqtSignal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -806,6 +842,7 @@ class ProjectView(QWidget):
         self.current_audio_timeline: list[dict[str, Any]] = []
         self.current_combined_lie_timeline: list[dict[str, float | None]] = []
         self.current_audio_feature_series: dict[str, list[dict[str, float]]] = {}
+        self._audio_feature_charts: list[tuple[str, MetricTimelineWidget]] = []
         self.current_original_video_path: str | None = None
         self.current_overlay_video_path: str | None = None
         self.current_selected_run_id: str | None = None
@@ -813,6 +850,8 @@ class ProjectView(QWidget):
         self._models: list[str] = []
         self._detectors: list[str] = []
         self._audio_providers: list[AudioProvider] = []
+        self._audio_providers_request_inflight = False
+        self._audio_providers_loaded_once = False
         self._can_edit_project = False
         self._can_manage_members = False
         self._video_enabled_series: set[str] = set()
@@ -851,7 +890,7 @@ class ProjectView(QWidget):
         self.back_button.setObjectName("SecondaryButton")
         self.back_button.clicked.connect(self.back_requested.emit)
 
-        self.breadcrumb_label = QLabel("Dashboard / Проекты")
+        self.breadcrumb_label = QLabel("Панель / Проекты")
         self.breadcrumb_label.setObjectName("SectionHint")
 
         self.refresh_button = QPushButton("Обновить")
@@ -916,7 +955,7 @@ class ProjectView(QWidget):
         self.play_button = QPushButton("▶")
         self.play_button.setObjectName("SecondaryButton")
         self.play_button.setFixedWidth(46)
-        self.play_button.setToolTip("Play/Pause (Space)")
+        self.play_button.setToolTip("Пуск/пауза (пробел)")
         self.play_button.clicked.connect(self._toggle_playback)
 
         self.fullscreen_button = QPushButton("⛶")
@@ -1211,13 +1250,27 @@ class ProjectView(QWidget):
         self.detector_combo.blockSignals(False)
         self._update_permissions_state()
 
-    def set_audio_providers(self, providers: list[AudioProvider]) -> None:
+    def set_audio_providers(self, providers: list[AudioProvider], *, loaded_from_server: bool = False) -> None:
         self._audio_providers = [item for item in providers if item.code]
+        self._audio_providers_request_inflight = False
+        if loaded_from_server:
+            self._audio_providers_loaded_once = True
+        elif self._audio_providers:
+            self._audio_providers_loaded_once = True
         self._refresh_audio_providers_for_mode(
             self._current_lie_processing_mode()
         )
         self._on_processing_mode_changed()
         self._update_permissions_state()
+
+    def mark_audio_providers_request_failed(self) -> None:
+        self._audio_providers_request_inflight = False
+
+    def reset_audio_providers_state(self) -> None:
+        self._audio_providers = []
+        self._audio_providers_request_inflight = False
+        self._audio_providers_loaded_once = False
+        self._refresh_audio_providers_for_mode(self._current_lie_processing_mode())
 
     def set_loading(self, loading: bool, message: str | None = None) -> None:
         self.back_button.setDisabled(loading)
@@ -1284,7 +1337,7 @@ class ProjectView(QWidget):
         self.current_overlay_video_path = overlay_video_path
 
         self.project_title_label.setText(project.title)
-        self.breadcrumb_label.setText(f"Dashboard / Проекты / {project.title}")
+        self.breadcrumb_label.setText(f"Панель / Проекты / {project.title}")
         self.project_status_label.setText(f"Статус проекта: {project_status_label(project.status)}")
         self.project_description_label.setText(project.description or "Описание не задано")
         self.project_updated_label.setText(f"Обновлен: {format_datetime(project.updated_at)}")
@@ -1302,6 +1355,7 @@ class ProjectView(QWidget):
 
     def _render_audio_feature_widgets(self) -> None:
         self._clear_layout(self.audio_features_charts_layout)
+        self._audio_feature_charts = []
         if not self.current_audio_feature_series:
             empty_label = QLabel("Аудио-признаки не обнаружены")
             empty_label.setObjectName("SectionHint")
@@ -1324,6 +1378,7 @@ class ProjectView(QWidget):
             chart.time_clicked.connect(self._seek_video_to_time)
             feature_layout.addWidget(chart, 1)
 
+            self._audio_feature_charts.append((feature_label_ru(feature_name), chart))
             self.audio_features_charts_layout.addWidget(feature_frame)
 
     def _clear_layout(self, layout: QLayout) -> None:
@@ -1774,6 +1829,15 @@ class ProjectView(QWidget):
         )
         self.analysis_scope_combo.setEnabled(self._can_edit_project)
         self._refresh_audio_providers_for_mode(lie_mode)
+        if (
+            self._can_edit_project
+            and lie_enabled
+            and not self._audio_providers
+            and not self._audio_providers_request_inflight
+            and not self._audio_providers_loaded_once
+        ):
+            self._audio_providers_request_inflight = True
+            self.audio_providers_requested.emit(lie_mode)
         self.model_combo.setEnabled(self._can_edit_project and emotions_enabled)
         self.detector_combo.setEnabled(self._can_edit_project and emotions_enabled)
         self.processing_mode_combo.setEnabled(
@@ -1797,9 +1861,17 @@ class ProjectView(QWidget):
             else:
                 providers = [item for item in self._audio_providers if item.supports_video]
         elif normalized_mode == "audio_only":
-            providers = [item for item in self._audio_providers if item.supports_audio]
+            providers = [
+                item
+                for item in self._audio_providers
+                if item.supports_audio and not item.is_video_provider
+            ]
         else:
-            providers = [item for item in self._audio_providers if item.supports_video]
+            providers = [
+                item
+                for item in self._audio_providers
+                if item.supports_video and not item.is_video_provider
+            ]
 
         for provider in providers:
             self.audio_provider_combo.addItem(provider.title, provider.code)
@@ -1910,7 +1982,7 @@ class ProjectView(QWidget):
 
         status_text = run_status_label(run.status)
         self.run_status_label.setText(
-            f"Статус запуска: {status_text} · task={run.video_task_id[:10]} · режим={run.launch_mode}"
+            f"Статус запуска: {status_text} · задача={run.video_task_id[:10]} · режим={run.launch_mode}"
         )
 
         if run.completed_at:
@@ -1951,7 +2023,7 @@ class ProjectView(QWidget):
             role_combo.addItem("Наблюдатель", "viewer")
             role_combo.setCurrentIndex(0 if member.member_role == "editor" else 1)
 
-            apply_button = QPushButton("OK")
+            apply_button = QPushButton("Применить")
             apply_button.setObjectName("SecondaryButton")
             apply_button.setFixedWidth(46)
 
@@ -2222,25 +2294,115 @@ class ProjectView(QWidget):
             color = QColor("#0ea5e9")
         self.video_widget.set_characteristic_badge(f"{label}: {probability:.2f}", color)
 
+    @staticmethod
+    def _series_line_description(series_name: str) -> str:
+        key = str(series_name).strip().lower()
+        if key in LIE_RISK_KEYS:
+            return "Линия показывает вероятность риска лжи в диапазоне 0..1."
+        if key == "truth":
+            return "Линия показывает вероятность правдивого ответа в диапазоне 0..1."
+        return "Линия показывает вероятность этого состояния в диапазоне 0..1."
+
+    def _collect_report_charts(self) -> list[dict[str, Any]]:
+        charts: list[dict[str, Any]] = []
+
+        def add_chart(
+            title: str,
+            description: str,
+            legend_items: list[tuple[str, QColor, str]],
+            widget: EmotionTimelineWidget | MetricTimelineWidget | CombinedLieTimelineWidget,
+        ) -> None:
+            chart_pixmap = widget.render_to_pixmap()
+            if chart_pixmap.isNull():
+                return
+            if chart_pixmap.width() <= 0 or chart_pixmap.height() <= 0:
+                return
+            charts.append(
+                {
+                    "title": title,
+                    "description": description,
+                    "legend_items": legend_items,
+                    "pixmap": chart_pixmap,
+                }
+            )
+
+        if self.current_video_timeline:
+            video_legend = [
+                (
+                    emotion_label_ru(name),
+                    EMOTION_COLORS.get(name, QColor("#0ea5e9")),
+                    self._series_line_description(name),
+                )
+                for name in self.timeline_widget.visible_series()
+            ]
+            add_chart(
+                "Видео: вероятности эмоций",
+                "График показывает, как меняются вероятности распознанных эмоций в видеопотоке по времени.",
+                video_legend,
+                self.timeline_widget,
+            )
+
+        if self.current_audio_timeline:
+            audio_legend = [
+                (
+                    emotion_label_ru(name),
+                    EMOTION_COLORS.get(name, QColor("#0ea5e9")),
+                    self._series_line_description(name),
+                )
+                for name in self.audio_timeline_widget.visible_series()
+            ]
+            add_chart(
+                "Аудио: риск лжи",
+                "График отражает динамику оценок по аудио-каналу (речь, паузы, темп, высота тона и другие признаки).",
+                audio_legend,
+                self.audio_timeline_widget,
+            )
+
+        if self.current_combined_lie_timeline:
+            add_chart(
+                "Объединенный риск лжи",
+                "График объединяет аудио- и видео-сигналы для итоговой оценки риска лжи. Пунктирные линии показывают отдельные вклады источников.",
+                self.combined_lie_widget.visible_series(),
+                self.combined_lie_widget,
+            )
+
+        for feature_title, feature_chart in self._audio_feature_charts:
+            add_chart(
+                f"Аудио-признак: {feature_title}",
+                f"График показывает изменение признака «{feature_title}» во времени.",
+                [
+                    (
+                        "Значение признака",
+                        MetricTimelineWidget.line_color(),
+                        "Линия показывает численное значение признака по временной шкале.",
+                    )
+                ],
+                feature_chart,
+            )
+
+        return charts
+
     def export_report_pdf(self) -> None:
         project = self.current_project
         if project is None:
             QMessageBox.warning(self, "Отчет", "Откройте проект перед экспортом отчета")
             return
 
-        if not self.current_timeline and not self.current_combined_lie_timeline:
+        charts = self._collect_report_charts()
+        if not charts:
             QMessageBox.warning(self, "Отчет", "Нет данных графиков для экспорта")
             return
 
-        run_id = self.current_selected_run_id or "no-run"
+        run_id = self.current_selected_run_id or "без-запуска"
         default_name = f"{project.title}_{run_id}.pdf".replace(" ", "_")
-        filename, _ = QFileDialog.getSaveFileName(self, "Сохранить отчет", default_name, "PDF Files (*.pdf)")
+        filename, _ = QFileDialog.getSaveFileName(self, "Сохранить отчет", default_name, "Файлы PDF (*.pdf)")
         if not filename:
             return
 
         output_path = filename if filename.lower().endswith(".pdf") else f"{filename}.pdf"
 
         try:
+            generated_at = datetime.now().strftime("%d.%m.%Y %H:%M")
             writer = QPdfWriter(output_path)
             writer.setResolution(150)
             writer.setPageSize(QPageSize(QPageSize.PageSizeId.A4))
@@ -2248,75 +2410,148 @@ class ProjectView(QWidget):
 
             painter = QPainter(writer)
             if not painter.isActive():
-                raise RuntimeError("Не удалось открыть PDF writer")
+                raise RuntimeError("Не удалось инициализировать PDF-документ.")
 
             page_rect = writer.pageLayout().paintRectPixels(writer.resolution())
             margin = 48
-            y = margin
-
             title_font = QFont("Segoe UI", 16, QFont.Weight.Bold)
             section_font = QFont("Segoe UI", 11, QFont.Weight.Bold)
             text_font = QFont("Segoe UI", 10)
-            line_height = 22
 
+            painter.fillRect(page_rect, QColor("#eef3fb"))
+
+            header_rect = QRect(margin, margin - 8, page_rect.width() - margin * 2, 86)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor("#1f3c88"))
+            painter.drawRoundedRect(header_rect, 12, 12)
+
+            painter.setPen(QColor("#ffffff"))
             painter.setFont(title_font)
+            painter.drawText(
+                header_rect.adjusted(18, 12, -18, -32),
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                "Отчет проекта",
+            )
+            painter.setFont(QFont("Segoe UI", 9))
+            painter.drawText(
+                header_rect.adjusted(18, 44, -18, -12),
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                f"Сформирован: {generated_at}",
+            )
+
+            metadata_rect = QRect(margin, header_rect.bottom() + 18, page_rect.width() - margin * 2, 138)
+            painter.setPen(QColor("#d5ddf0"))
+            painter.setBrush(QColor("#ffffff"))
+            painter.drawRoundedRect(metadata_rect, 10, 10)
+
+            painter.setFont(section_font)
             painter.setPen(QColor("#1f2746"))
-            painter.drawText(margin, y + 24, "Отчет проекта EmotionVision")
-            y += 46
+            painter.drawText(metadata_rect.left() + 16, metadata_rect.top() + 28, "Метаданные")
 
             painter.setFont(text_font)
-            painter.setPen(QColor("#1f2746"))
             metadata_lines = [
                 f"Проект: {project.title}",
                 f"Статус: {project_status_label(project.status)}",
                 f"Обновлен: {format_datetime(project.updated_at)}",
-                f"Сформирован: {datetime.now().strftime('%d.%m.%Y %H:%M')}",
                 f"Выбранный запуск: {self.current_selected_run_id or '-'}",
+                f"Количество графиков в отчете: {len(charts)}",
             ]
+            y = metadata_rect.top() + 52
             for line in metadata_lines:
-                painter.drawText(margin, y, line)
-                y += line_height
+                painter.drawText(metadata_rect.left() + 16, y, line)
+                y += 20
 
-            y += 6
+            summary_lines = self._build_timeline_summary_lines()
+            summary_rect = QRect(
+                margin,
+                metadata_rect.bottom() + 18,
+                page_rect.width() - margin * 2,
+                page_rect.height() - (metadata_rect.bottom() + 18) - margin,
+            )
+
+            painter.setPen(QColor("#d5ddf0"))
+            painter.setBrush(QColor("#ffffff"))
+            painter.drawRoundedRect(summary_rect, 10, 10)
+            painter.setPen(QColor("#1f2746"))
             painter.setFont(section_font)
-            painter.drawText(margin, y, "Сводка эмоций и риска лжи")
-            y += 20
+            painter.drawText(summary_rect.left() + 16, summary_rect.top() + 28, "Сводка эмоций и риска лжи")
 
             painter.setFont(text_font)
-            summary_lines = self._build_timeline_summary_lines()
+            text_y = summary_rect.top() + 52
+            text_bottom = summary_rect.bottom() - 18
             for line in summary_lines:
-                if y > page_rect.height() - margin:
+                if text_y > text_bottom:
                     writer.newPage()
                     page_rect = writer.pageLayout().paintRectPixels(writer.resolution())
-                    y = margin
+                    painter.fillRect(page_rect, QColor("#eef3fb"))
+                    summary_rect = QRect(margin, margin, page_rect.width() - margin * 2, page_rect.height() - margin * 2)
+                    painter.setPen(QColor("#d5ddf0"))
+                    painter.setBrush(QColor("#ffffff"))
+                    painter.drawRoundedRect(summary_rect, 10, 10)
+                    painter.setPen(QColor("#1f2746"))
+                    painter.setFont(section_font)
+                    painter.drawText(summary_rect.left() + 16, summary_rect.top() + 28, "Сводка (продолжение)")
                     painter.setFont(text_font)
-                painter.drawText(margin, y, line)
-                y += line_height
+                    text_y = summary_rect.top() + 52
+                    text_bottom = summary_rect.bottom() - 18
+                painter.drawText(summary_rect.left() + 18, text_y, f"• {line}")
+                text_y += 20
 
-            if self.current_combined_lie_timeline:
-                chart_widget = self.combined_lie_widget
-                chart_title = "Объединенный график вероятности лжи"
-            elif self.current_video_timeline:
-                chart_widget = self.timeline_widget
-                chart_title = "Видео: график вероятностей эмоций"
-            else:
-                chart_widget = self.audio_timeline_widget
-                chart_title = "Аудио: график риска лжи"
+            total_charts = len(charts)
+            for index, chart_payload in enumerate(charts, start=1):
+                chart_title = str(chart_payload.get("title") or "График")
+                chart_description = str(chart_payload.get("description") or "")
+                legend_items_raw = chart_payload.get("legend_items")
+                chart_pixmap = chart_payload.get("pixmap")
+                if not isinstance(chart_pixmap, QPixmap):
+                    continue
+                legend_items: list[tuple[str, QColor, str]] = []
+                if isinstance(legend_items_raw, list):
+                    for item in legend_items_raw:
+                        if not isinstance(item, tuple) or len(item) != 3:
+                            continue
+                        name, color, description = item
+                        legend_items.append((str(name), QColor(color), str(description)))
 
-            chart_pixmap = chart_widget.render_to_pixmap()
-            if not chart_pixmap.isNull():
                 writer.setPageOrientation(QPageLayout.Orientation.Landscape)
                 writer.newPage()
                 page_rect = writer.pageLayout().paintRectPixels(writer.resolution())
-                y = margin
+                painter.fillRect(page_rect, QColor("#edf2ff"))
 
+                title_bar_rect = QRect(margin, margin - 8, page_rect.width() - margin * 2, 60)
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(QColor("#1f3c88"))
+                painter.drawRoundedRect(title_bar_rect, 10, 10)
+
+                painter.setPen(QColor("#ffffff"))
                 painter.setFont(section_font)
-                painter.setPen(QColor("#1f2746"))
-                painter.drawText(margin, y + 20, chart_title)
-                y += 34
+                painter.drawText(
+                    title_bar_rect.adjusted(16, 10, -16, -10),
+                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                    chart_title,
+                )
+                painter.drawText(
+                    title_bar_rect.adjusted(16, 10, -16, -10),
+                    Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                    f"График {index}/{total_charts}",
+                )
 
-                max_width = page_rect.width() - margin * 2
-                max_height = page_rect.height() - y - margin
+                legend_height = 118 + max(0, len(legend_items) - 1) * 22
+                legend_height = min(max(118, legend_height), 260)
+                chart_area_height = page_rect.height() - title_bar_rect.bottom() - margin - legend_height - 40
+                chart_area_height = max(180, chart_area_height)
+                chart_card_rect = QRect(
+                    margin,
+                    title_bar_rect.bottom() + 18,
+                    page_rect.width() - margin * 2,
+                    chart_area_height,
+                )
+                painter.setPen(QColor("#d5ddf0"))
+                painter.setBrush(QColor("#ffffff"))
+                painter.drawRoundedRect(chart_card_rect, 10, 10)
+
+                max_width = chart_card_rect.width() - 28
+                max_height = chart_card_rect.height() - 28
                 if max_width > 10 and max_height > 10:
                     scaled = chart_pixmap.scaled(
                         max_width,
@@ -2324,8 +2559,74 @@ class ProjectView(QWidget):
                         Qt.AspectRatioMode.KeepAspectRatio,
                         Qt.TransformationMode.SmoothTransformation,
                     )
-                    x = (page_rect.width() - scaled.width()) // 2
+                    x = chart_card_rect.left() + (chart_card_rect.width() - scaled.width()) // 2
+                    y = chart_card_rect.top() + (chart_card_rect.height() - scaled.height()) // 2
                     painter.drawPixmap(x, y, scaled)
+
+                legend_rect_top = chart_card_rect.bottom() + 14
+                legend_rect_height = page_rect.bottom() - margin - legend_rect_top
+                if legend_rect_height >= 84:
+                    legend_rect = QRect(
+                        margin,
+                        legend_rect_top,
+                        page_rect.width() - margin * 2,
+                        legend_rect_height,
+                    )
+                    painter.setPen(QColor("#d5ddf0"))
+                    painter.setBrush(QColor("#ffffff"))
+                    painter.drawRoundedRect(legend_rect, 10, 10)
+
+                    painter.setPen(QColor("#1f2746"))
+                    painter.setFont(section_font)
+                    painter.drawText(legend_rect.left() + 14, legend_rect.top() + 24, "Описание и легенда")
+
+                    painter.setFont(text_font)
+                    description_rect = QRect(
+                        legend_rect.left() + 14,
+                        legend_rect.top() + 34,
+                        legend_rect.width() - 28,
+                        44,
+                    )
+                    painter.setPen(QColor("#334155"))
+                    painter.drawText(
+                        description_rect,
+                        int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop | Qt.TextFlag.TextWordWrap),
+                        chart_description,
+                    )
+
+                    legend_start_y = description_rect.bottom() + 18
+                    if legend_items:
+                        painter.setPen(QColor("#1f2746"))
+                        painter.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+                        painter.drawText(legend_rect.left() + 14, legend_start_y, "Линии графика:")
+                        painter.setFont(text_font)
+                        row_y = legend_start_y + 18
+                        row_bottom = legend_rect.bottom() - 14
+                        for series_name, series_color, series_desc in legend_items:
+                            if row_y > row_bottom:
+                                break
+                            marker_size = 11
+                            marker_rect = QRect(legend_rect.left() + 16, row_y - marker_size + 1, marker_size, marker_size)
+                            painter.setPen(series_color.darker(130))
+                            painter.setBrush(series_color)
+                            painter.drawRect(marker_rect)
+                            text_left = marker_rect.right() + 10
+                            text_rect = QRect(
+                                text_left,
+                                row_y - 12,
+                                max(40, legend_rect.right() - text_left - 14),
+                                22,
+                            )
+                            painter.setPen(QColor("#334155"))
+                            painter.drawText(
+                                text_rect,
+                                int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter | Qt.TextFlag.TextWordWrap),
+                                f"{series_name}: {series_desc}",
+                            )
+                            row_y += 20
+                    else:
+                        painter.setPen(QColor("#64748b"))
+                        painter.drawText(legend_rect.left() + 14, legend_start_y, "Для этого графика нет отдельных линий.")
 
             painter.end()
             self.set_status_message(f"Отчет сохранен: {output_path}", is_error=False)
