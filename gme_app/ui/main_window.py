@@ -349,9 +349,6 @@ class MainWindow (QMainWindow ):
         )
 
     def _on_project_audio_providers_requested (self ,lie_mode :str )->None :
-        normalized_mode =str (lie_mode or "").strip ().lower ()or "audio_only"
-        if normalized_mode =="video_only":
-            return 
         self ._load_audio_providers_on_demand (show_error_on_project =True )
 
     def refresh_dashboard(self, *, show_status: bool = True, force: bool = False) -> None:
@@ -367,6 +364,7 @@ class MainWindow (QMainWindow ):
         def task() -> dict[str, Any]:
             models: list[str] = []
             detectors: list[str] = []
+            audio_providers: list[AudioProvider] = []
             try:
                 models = self.client.get_processing_models()
             except ApiError:
@@ -375,6 +373,10 @@ class MainWindow (QMainWindow ):
                 detectors = self.client.get_face_detectors()
             except ApiError:
                 detectors = []
+            try:
+                audio_providers = self.client.get_audio_providers()
+            except ApiError:
+                audio_providers = []
 
             projects_page = self.client.list_projects(limit=100, offset=0)
             projects = projects_page.items
@@ -413,6 +415,7 @@ class MainWindow (QMainWindow ):
             return {
                 "models": models,
                 "detectors": detectors,
+                "audio_providers": audio_providers,
                 "projects": projects,
                 "runs": runs,
             }
@@ -424,6 +427,13 @@ class MainWindow (QMainWindow ):
             fetched_detectors = [str(item) for item in result.get("detectors", []) if str(item).strip()]
             if fetched_detectors:
                 self._available_detectors = fetched_detectors
+            fetched_audio_providers = [
+                item
+                for item in result.get("audio_providers", [])
+                if isinstance(item, AudioProvider) and item.code
+            ]
+            if fetched_audio_providers:
+                self._available_audio_providers = fetched_audio_providers
 
             self.dashboard_view.set_models(self._available_models)
             self.dashboard_view.set_detectors(self._available_detectors)

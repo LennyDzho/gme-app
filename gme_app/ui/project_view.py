@@ -1076,11 +1076,16 @@ class ProjectView(QWidget):
         meta_layout.addWidget(self.project_description_label)
         meta_layout.addWidget(self.project_updated_label)
 
-        controls = QHBoxLayout()
-        controls.setSpacing(8)
+        selectors_layout = QVBoxLayout()
+        selectors_layout.setSpacing(6)
+
+        selectors_row_top = QHBoxLayout()
+        selectors_row_top.setSpacing(8)
+        selectors_row_bottom = QHBoxLayout()
+        selectors_row_bottom.setSpacing(8)
 
         self.analysis_scope_combo = QComboBox()
-        self.analysis_scope_combo.setMinimumWidth(170)
+        self.analysis_scope_combo.setMinimumWidth(130)
         self.analysis_scope_combo.setToolTip("Тип анализа")
         self.analysis_scope_combo.addItem("Только эмоции", ANALYSIS_SCOPE_EMOTIONS_ONLY)
         self.analysis_scope_combo.addItem("Только ложь", ANALYSIS_SCOPE_LIE_ONLY)
@@ -1088,18 +1093,18 @@ class ProjectView(QWidget):
         self.analysis_scope_combo.currentIndexChanged.connect(self._on_processing_mode_changed)
 
         self.model_combo = QComboBox()
-        self.model_combo.setMinimumWidth(140)
+        self.model_combo.setMinimumWidth(130)
         self.detector_combo = QComboBox()
-        self.detector_combo.setMinimumWidth(150)
+        self.detector_combo.setMinimumWidth(130)
         self.processing_mode_combo = QComboBox()
-        self.processing_mode_combo.setMinimumWidth(150)
+        self.processing_mode_combo.setMinimumWidth(130)
         self.processing_mode_combo.setToolTip("Режим анализа лжи")
         self.processing_mode_combo.addItem("Только видео", "video_only")
         self.processing_mode_combo.addItem("Только аудио", "audio_only")
         self.processing_mode_combo.addItem("Видео + аудио", "audio_and_video")
         self.processing_mode_combo.currentIndexChanged.connect(self._on_processing_mode_changed)
         self.audio_provider_combo = QComboBox()
-        self.audio_provider_combo.setMinimumWidth(150)
+        self.audio_provider_combo.setMinimumWidth(130)
         self.audio_provider_combo.addItem("Нет подходящих провайдеров", "__none__")
 
         self.start_processing_button = QPushButton("Запустить обработку")
@@ -1116,17 +1121,36 @@ class ProjectView(QWidget):
         self.delete_project_button.setObjectName("SecondaryButton")
         self.delete_project_button.clicked.connect(self._emit_delete_project)
 
-        controls.addWidget(self.analysis_scope_combo, 1)
-        controls.addWidget(self.model_combo, 1)
-        controls.addWidget(self.detector_combo, 1)
-        controls.addWidget(self.processing_mode_combo, 1)
-        controls.addWidget(self.audio_provider_combo, 1)
-        controls.addWidget(self.start_processing_button)
-        controls.addWidget(self.cancel_processing_button)
-        controls.addWidget(self.export_button)
-        controls.addWidget(self.delete_project_button)
+        selectors_row_top.addWidget(self.analysis_scope_combo, 1)
+        selectors_row_top.addWidget(self.model_combo, 1)
+        selectors_row_top.addWidget(self.detector_combo, 1)
+        selectors_row_bottom.addWidget(self.processing_mode_combo, 1)
+        selectors_row_bottom.addWidget(self.audio_provider_combo, 1)
+        selectors_layout.addLayout(selectors_row_top)
+        selectors_layout.addLayout(selectors_row_bottom)
+        meta_layout.addLayout(selectors_layout)
 
-        meta_layout.addLayout(controls)
+        actions_layout = QVBoxLayout()
+        actions_layout.setSpacing(8)
+        actions_row_top = QHBoxLayout()
+        actions_row_top.setSpacing(8)
+        actions_row_bottom = QHBoxLayout()
+        actions_row_bottom.setSpacing(8)
+        for button in (
+            self.start_processing_button,
+            self.cancel_processing_button,
+            self.export_button,
+            self.delete_project_button,
+        ):
+            button.setMinimumHeight(38)
+            button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        actions_row_top.addWidget(self.start_processing_button, 1)
+        actions_row_top.addWidget(self.cancel_processing_button, 1)
+        actions_row_bottom.addWidget(self.export_button, 1)
+        actions_row_bottom.addWidget(self.delete_project_button, 1)
+        actions_layout.addLayout(actions_row_top)
+        actions_layout.addLayout(actions_row_bottom)
+        meta_layout.addLayout(actions_layout)
         right_col.addWidget(self.meta_frame)
 
         runs_frame = QFrame()
@@ -1187,13 +1211,17 @@ class ProjectView(QWidget):
 
         self.member_login_input = QLineEdit()
         self.member_login_input.setPlaceholderText("Логин пользователя")
+        self.member_login_input.setMinimumHeight(38)
 
         self.member_role_combo = QComboBox()
         self.member_role_combo.addItem("Редактор", "editor")
         self.member_role_combo.addItem("Наблюдатель", "viewer")
+        self.member_role_combo.setMinimumHeight(15)
+        self.member_role_combo.setMinimumWidth(140)
 
         self.add_member_button = QPushButton("Добавить")
         self.add_member_button.setObjectName("SecondaryButton")
+        self.add_member_button.setMinimumHeight(15)
         self.add_member_button.clicked.connect(self._emit_add_member)
 
         add_row.addWidget(self.member_login_input, 1)
@@ -1208,6 +1236,7 @@ class ProjectView(QWidget):
         self.members_table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
         self.members_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.members_table.setMinimumHeight(220)
+        self.members_table.verticalHeader().setDefaultSectionSize(44)
         header_view = self.members_table.horizontalHeader()
         header_view.setStretchLastSection(True)
         self.members_table.setColumnWidth(0, 170)
@@ -1786,23 +1815,24 @@ class ProjectView(QWidget):
         scope = self._current_analysis_scope()
         if scope == ANALYSIS_SCOPE_EMOTIONS_ONLY:
             return "video_only"
-        if scope == ANALYSIS_SCOPE_EMOTIONS_AND_LIE:
-            return "audio_and_video"
         return self._current_lie_processing_mode()
 
     def _emit_start_processing(self) -> None:
         if self.current_project is None:
             return
         scope = self._current_analysis_scope()
-        model_name = self.model_combo.currentText().strip()
-        detector_name = str(self.detector_combo.currentData() or "").strip().lower()
+        raw_model_name = self.model_combo.currentText().strip()
+        raw_detector_name = str(self.detector_combo.currentData() or "").strip().lower()
+        emotions_enabled = scope in {ANALYSIS_SCOPE_EMOTIONS_ONLY, ANALYSIS_SCOPE_EMOTIONS_AND_LIE}
+        model_name = raw_model_name if emotions_enabled else ""
+        detector_name = raw_detector_name if emotions_enabled else ""
         processing_mode = self._resolved_processing_mode()
         audio_provider_raw = str(self.audio_provider_combo.currentData() or "").strip().lower()
         audio_provider = "" if audio_provider_raw in {"", "__none__"} else audio_provider_raw
-        if scope in {ANALYSIS_SCOPE_EMOTIONS_ONLY, ANALYSIS_SCOPE_EMOTIONS_AND_LIE} and not model_name:
+        if emotions_enabled and not model_name:
             self.set_status_message("Выберите модель для запуска обработки.", is_error=True)
             return
-        if scope in {ANALYSIS_SCOPE_EMOTIONS_ONLY, ANALYSIS_SCOPE_EMOTIONS_AND_LIE} and not detector_name:
+        if emotions_enabled and not detector_name:
             self.set_status_message("Выберите детектор лица для запуска обработки.", is_error=True)
             return
         if scope in {ANALYSIS_SCOPE_LIE_ONLY, ANALYSIS_SCOPE_EMOTIONS_AND_LIE} and audio_provider_raw in {"", "__none__"}:
@@ -1819,8 +1849,6 @@ class ProjectView(QWidget):
     def _on_processing_mode_changed(self) -> None:
         scope = self._current_analysis_scope()
         lie_mode = self._current_lie_processing_mode()
-        if scope == ANALYSIS_SCOPE_EMOTIONS_AND_LIE:
-            lie_mode = "audio_and_video"
 
         emotions_enabled = scope in {ANALYSIS_SCOPE_EMOTIONS_ONLY, ANALYSIS_SCOPE_EMOTIONS_AND_LIE}
         lie_enabled = scope in {ANALYSIS_SCOPE_LIE_ONLY, ANALYSIS_SCOPE_EMOTIONS_AND_LIE}
@@ -1843,7 +1871,6 @@ class ProjectView(QWidget):
         self.processing_mode_combo.setEnabled(
             self._can_edit_project
             and lie_enabled
-            and scope != ANALYSIS_SCOPE_EMOTIONS_AND_LIE
         )
         has_compatible_audio_provider = str(self.audio_provider_combo.currentData() or "") != "__none__"
         self.audio_provider_combo.setEnabled(self._can_edit_project and lie_enabled and has_compatible_audio_provider)
@@ -1854,24 +1881,14 @@ class ProjectView(QWidget):
         self.audio_provider_combo.clear()
 
         normalized_mode = str(mode or "").strip().lower() or "audio_only"
-        if normalized_mode == "audio_and_video":
-            video_providers = [item for item in self._audio_providers if item.is_video_provider]
-            if video_providers:
-                providers = video_providers
-            else:
-                providers = [item for item in self._audio_providers if item.supports_video]
-        elif normalized_mode == "audio_only":
-            providers = [
-                item
-                for item in self._audio_providers
-                if item.supports_audio and not item.is_video_provider
-            ]
-        else:
-            providers = [
-                item
-                for item in self._audio_providers
-                if item.supports_video and not item.is_video_provider
-            ]
+        providers_by_code = {item.code: item for item in self._audio_providers}
+        allowed_by_mode: dict[str, tuple[str, ...]] = {
+            "audio_only": ("native", "lie_detection"),
+            "video_only": ("lie_to_me",),
+            "audio_and_video": ("lie_to_me",),
+        }
+        allowed_codes = allowed_by_mode.get(normalized_mode, allowed_by_mode["audio_only"])
+        providers = [providers_by_code[code] for code in allowed_codes if code in providers_by_code]
 
         for provider in providers:
             self.audio_provider_combo.addItem(provider.title, provider.code)
@@ -2009,6 +2026,7 @@ class ProjectView(QWidget):
             user_text = member.ui_name
             if project is not None and member.user_id == project.creator_id:
                 user_text = f"{user_text} (создатель)"
+            self.members_table.setRowHeight(row, 15)
 
             self.members_table.setItem(row, 0, QTableWidgetItem(user_text))
             self.members_table.setItem(row, 2, QTableWidgetItem(member.user_role or "-"))
@@ -2022,10 +2040,13 @@ class ProjectView(QWidget):
             role_combo.addItem("Редактор", "editor")
             role_combo.addItem("Наблюдатель", "viewer")
             role_combo.setCurrentIndex(0 if member.member_role == "editor" else 1)
+            role_combo.setMinimumHeight(20)
+            role_combo.setMinimumWidth(50)
 
             apply_button = QPushButton("Применить")
             apply_button.setObjectName("SecondaryButton")
-            apply_button.setFixedWidth(46)
+            apply_button.setMinimumHeight(15)
+            apply_button.setMinimumWidth(50)
 
             role_layout.addWidget(role_combo, 1)
             role_layout.addWidget(apply_button, 0)
@@ -2041,6 +2062,8 @@ class ProjectView(QWidget):
 
             remove_button = QPushButton("Удалить")
             remove_button.setObjectName("SecondaryButton")
+            remove_button.setMinimumHeight(15)
+            remove_button.setMinimumWidth(96)
             can_remove = self._can_manage_members and project is not None and member.user_id != project.creator_id
             remove_button.setEnabled(can_remove)
             remove_button.clicked.connect(

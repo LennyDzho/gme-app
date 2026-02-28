@@ -199,8 +199,6 @@ class CreateProjectDialog (QDialog ):
         scope =self ._current_analysis_scope ()
         if scope =="emotions_only":
             return "video_only"
-        if scope =="emotions_and_lie":
-            return "audio_and_video"
         return self ._current_lie_processing_mode ()
 
     def _on_accept (self )->None :
@@ -241,15 +239,13 @@ class CreateProjectDialog (QDialog ):
     def _on_processing_mode_changed (self )->None :
         scope =self ._current_analysis_scope ()
         lie_mode =self ._current_lie_processing_mode ()
-        if scope =="emotions_and_lie":
-            lie_mode ="audio_and_video"
 
         emotion_enabled =scope in {"emotions_only","emotions_and_lie"}
         lie_enabled =scope in {"lie_only","emotions_and_lie"}
         self ._refresh_audio_providers_for_mode (lie_mode )
         self .model_combo .setEnabled (emotion_enabled )
         self .detector_combo .setEnabled (emotion_enabled )
-        self .processing_mode_combo .setEnabled (lie_enabled and scope !="emotions_and_lie")
+        self .processing_mode_combo .setEnabled (lie_enabled )
         has_compatible_audio_provider =str (self .audio_provider_combo .currentData ()or "")!="__none__"
         self .audio_provider_combo .setEnabled (lie_enabled and has_compatible_audio_provider )
 
@@ -259,24 +255,14 @@ class CreateProjectDialog (QDialog ):
         self .audio_provider_combo .clear ()
 
         normalized_mode =str (mode or "").strip ().lower ()or "audio_only"
-        if normalized_mode =="audio_and_video":
-            video_providers =[item for item in self .audio_providers if item .is_video_provider ]
-            if video_providers :
-                providers =video_providers 
-            else :
-                providers =[item for item in self .audio_providers if item .supports_video ]
-        elif normalized_mode =="audio_only":
-            providers =[
-            item 
-            for item in self .audio_providers 
-            if item .supports_audio and not item .is_video_provider 
-            ]
-        else :
-            providers =[
-            item 
-            for item in self .audio_providers 
-            if item .supports_video and not item .is_video_provider 
-            ]
+        providers_by_code ={item .code :item for item in self .audio_providers }
+        allowed_by_mode :dict [str ,tuple [str ,...]]={
+        "audio_only":("native","lie_detection"),
+        "video_only":("lie_to_me",),
+        "audio_and_video":("lie_to_me",),
+        }
+        allowed_codes =allowed_by_mode .get (normalized_mode ,allowed_by_mode ["audio_only"])
+        providers =[providers_by_code [code ]for code in allowed_codes if code in providers_by_code ]
 
         for provider in providers :
             self .audio_provider_combo .addItem (provider .title ,provider .code )
@@ -292,13 +278,17 @@ class CreateProjectDialog (QDialog ):
         self .audio_provider_combo .blockSignals (False )
 
     def payload (self )->CreateProjectPayload :
+        scope =self ._current_analysis_scope ()
+        emotions_enabled =scope in {"emotions_only","emotions_and_lie"}
+        model_name =self .model_combo .currentText ().strip ()if emotions_enabled else ""
+        detector_name =str (self .detector_combo .currentData ()or "").strip ().lower ()if emotions_enabled else ""
         return CreateProjectPayload (
         title =self .title_input .text ().strip (),
         description =self .description_input .toPlainText ().strip (),
         video_path =self .video_input .text ().strip (),
         start_processing =self .start_processing_checkbox .isChecked (),
-        model_name =self .model_combo .currentText ().strip (),
-        detector_name =str (self .detector_combo .currentData ()or "").strip ().lower (),
+        model_name =model_name ,
+        detector_name =detector_name ,
         processing_mode =self ._resolved_processing_mode (),
         audio_provider =(
         ""
