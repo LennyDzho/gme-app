@@ -71,33 +71,11 @@ class AuthView(QWidget):
         self.tabs.tabBar().setUsesScrollButtons(False)
         card_layout.addWidget(self.tabs, 1)
 
-        self.info_panel = QFrame()
-        self.info_panel.setObjectName("AuthInfoPanel")
-        info_layout = QVBoxLayout(self.info_panel)
-        info_layout.setContentsMargins(22, 18, 22, 18)
-        info_layout.setSpacing(8)
-
-        info_title = QLabel("Что доступно после входа")
-        info_title.setObjectName("AuthInfoTitle")
-        info_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        info_text = QLabel(
-            "Создание и управление проектами, запуск обработки видео, "
-            "просмотр последних запусков и быстрый доступ к статусам в одном интерфейсе."
-        )
-        info_text.setObjectName("AuthInfoText")
-        info_text.setWordWrap(True)
-        info_text.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        info_layout.addWidget(info_title)
-        info_layout.addWidget(info_text)
-
         self.content = QWidget()
         self.content_layout = QVBoxLayout(self.content)
-        self.content_layout.setContentsMargins(0, 0, 0, 0)
+        self.content_layout.setContentsMargins(0, 0, 20, 0)
         self.content_layout.setSpacing(10)
         self.content_layout.addWidget(self.card, 0, Qt.AlignmentFlag.AlignHCenter)
-        self.content_layout.addWidget(self.info_panel)
 
         self.root_layout.addWidget(self.content, 0, Qt.AlignmentFlag.AlignHCenter)
         self.root_layout.addStretch(1)
