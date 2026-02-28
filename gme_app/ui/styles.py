@@ -51,6 +51,32 @@ QPushButton#SecondaryButton:hover:!disabled {
     background: #e2eaff;
 }
 
+QComboBox#MembersInlineCombo {
+    background: #ffffff;
+    color: #1f2746;
+    border: 1px solid #dce4fb;
+    border-radius: 10px;
+    padding: 6px 10px;
+}
+
+QComboBox#MembersInlineCombo::drop-down {
+    border: none;
+    background: transparent;
+}
+
+QPushButton#MembersInlineButton {
+    background: #ffffff;
+    color: #2d4c9f;
+    border: 1px solid #d0daf8;
+    border-radius: 10px;
+    padding: 8px 12px;
+    font-weight: 600;
+}
+
+QPushButton#MembersInlineButton:hover:!disabled {
+    background: #f5f8ff;
+}
+
 QFrame#AuthCard {
     background: #f8faff;
     border: 1px solid #dfe5f7;
@@ -315,6 +341,11 @@ QHeaderView::section {
 QTableWidget::item {
     border-bottom: 1px solid #eef2fe;
     padding: 8px;
+}
+
+QWidget#MembersRoleCell {
+    background: #ffffff;
+    border: none;
 }
 
 QScrollBar:vertical {

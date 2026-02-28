@@ -221,7 +221,11 @@ class MainWindow (QMainWindow ):
 
         current_widget = self.stack.currentWidget()
         if current_widget is self.project_view:
-            if self.current_project_id:
+            has_active_run = any(
+                run.status in {"scheduled", "pending", "running"}
+                for run in self.project_view.current_runs
+            )
+            if self.current_project_id and has_active_run:
                 self._refresh_project(
                     project_id=self.current_project_id,
                     preferred_run_id=self.current_project_run_id or "",

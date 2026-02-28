@@ -389,15 +389,14 @@ class DashboardView (QWidget ):
         self .runs_table .setSelectionMode (QTableWidget .SelectionMode .NoSelection )
         self .runs_table .setEditTriggers (QTableWidget .EditTrigger .NoEditTriggers )
         self .runs_table .setMinimumHeight (240 )
+        self .runs_table .setSizePolicy (QSizePolicy .Policy .Expanding ,QSizePolicy .Policy .Expanding )
         header_view =self .runs_table .horizontalHeader ()
         header_view .setSectionResizeMode (0 ,QHeaderView .ResizeMode .Stretch )
         header_view .setSectionResizeMode (1 ,QHeaderView .ResizeMode .ResizeToContents )
         header_view .setSectionResizeMode (2 ,QHeaderView .ResizeMode .ResizeToContents )
         header_view .setSectionResizeMode (3 ,QHeaderView .ResizeMode .ResizeToContents )
         header_view .setSectionResizeMode (4 ,QHeaderView .ResizeMode .ResizeToContents )
-        content_layout .addWidget (self .runs_table )
-
-        content_layout .addStretch (1 )
+        content_layout .addWidget (self .runs_table ,1 )
         self .content_scroll .setWidget (content )
         main_layout .addWidget (self .content_scroll ,1 )
 

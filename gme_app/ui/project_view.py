@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from PyQt6.QtCore import Qt, QRect, QUrl, pyqtSignal
+from PyQt6.QtCore import Qt, QRect, QSize, QTimer, QUrl, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QPainter, QPen, QPixmap
 from PyQt6.QtGui import QPageLayout, QPageSize, QPdfWriter
 from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
@@ -760,7 +760,19 @@ class PlaybackVideoWidget(QVideoWidget):
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setStyleSheet("background-color: #000000;")
         self.setAspectRatioMode(Qt.AspectRatioMode.KeepAspectRatio)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        # Keep horizontal growth, but avoid uncontrolled vertical stretching that
+        # turns into a large black area below the actual video content.
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+
+    def hasHeightForWidth(self) -> bool:  # type: ignore[override]
+        return True
+
+    def heightForWidth(self, width: int) -> int:  # type: ignore[override]
+        safe_width = max(1, width)
+        return max(260, int((safe_width * 9) / 16))
+
+    def sizeHint(self) -> QSize:  # type: ignore[override]
+        return QSize(640, 360)
 
     def _reposition_characteristic_badge(self) -> None:
         return
@@ -1236,12 +1248,12 @@ class ProjectView(QWidget):
         self.members_table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
         self.members_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.members_table.setMinimumHeight(220)
-        self.members_table.verticalHeader().setDefaultSectionSize(44)
+        self.members_table.verticalHeader().setDefaultSectionSize(35)
         header_view = self.members_table.horizontalHeader()
         header_view.setStretchLastSection(True)
-        self.members_table.setColumnWidth(0, 170)
-        self.members_table.setColumnWidth(1, 145)
-        self.members_table.setColumnWidth(2, 95)
+        self.members_table.setColumnWidth(0, 130)
+        self.members_table.setColumnWidth(1, 340)
+        self.members_table.setColumnWidth(2, 90)
 
         members_layout.addWidget(self.members_table)
         right_col.addWidget(members_frame, 1)
@@ -1343,6 +1355,10 @@ class ProjectView(QWidget):
         original_video_path: str | None,
         overlay_video_path: str | None,
     ) -> None:
+        previous_project_id = str(self.current_project.id) if self.current_project is not None else ""
+        preserve_scroll_position = bool(previous_project_id) and previous_project_id == str(project.id)
+        previous_scroll_value = self.scroll.verticalScrollBar().value() if preserve_scroll_position else 0
+
         self.current_project = project
         self.current_members = list(members)
         self.current_runs = list(runs)
@@ -1381,6 +1397,15 @@ class ProjectView(QWidget):
         self._update_permissions_state()
         self._sync_video_source()
         self._update_video_characteristic_overlay(self.media_player.position() / 1000 if self.media_player.position() > 0 else 0.0)
+
+        if preserve_scroll_position:
+            scroll_bar = self.scroll.verticalScrollBar()
+
+            def restore_scroll() -> None:
+                target = max(0, min(previous_scroll_value, scroll_bar.maximum()))
+                scroll_bar.setValue(target)
+
+            QTimer.singleShot(0, restore_scroll)
 
     def _render_audio_feature_widgets(self) -> None:
         self._clear_layout(self.audio_features_charts_layout)
@@ -2026,27 +2051,29 @@ class ProjectView(QWidget):
             user_text = member.ui_name
             if project is not None and member.user_id == project.creator_id:
                 user_text = f"{user_text} (создатель)"
-            self.members_table.setRowHeight(row, 15)
+            self.members_table.setRowHeight(row, 80)
 
             self.members_table.setItem(row, 0, QTableWidgetItem(user_text))
             self.members_table.setItem(row, 2, QTableWidgetItem(member.user_role or "-"))
 
             role_cell = QWidget()
+            role_cell.setObjectName("MembersRoleCell")
             role_layout = QHBoxLayout(role_cell)
             role_layout.setContentsMargins(0, 0, 0, 0)
             role_layout.setSpacing(4)
 
             role_combo = QComboBox()
+            role_combo.setObjectName("MembersInlineCombo")
             role_combo.addItem("Редактор", "editor")
             role_combo.addItem("Наблюдатель", "viewer")
             role_combo.setCurrentIndex(0 if member.member_role == "editor" else 1)
-            role_combo.setMinimumHeight(20)
-            role_combo.setMinimumWidth(50)
+            role_combo.setMinimumHeight(30)
+            role_combo.setMinimumWidth(70)
 
             apply_button = QPushButton("Применить")
-            apply_button.setObjectName("SecondaryButton")
-            apply_button.setMinimumHeight(15)
-            apply_button.setMinimumWidth(50)
+            apply_button.setObjectName("MembersInlineButton")
+            apply_button.setMinimumHeight(30)
+            apply_button.setMinimumWidth(70)
 
             role_layout.addWidget(role_combo, 1)
             role_layout.addWidget(apply_button, 0)
@@ -2062,8 +2089,8 @@ class ProjectView(QWidget):
 
             remove_button = QPushButton("Удалить")
             remove_button.setObjectName("SecondaryButton")
-            remove_button.setMinimumHeight(15)
-            remove_button.setMinimumWidth(96)
+            remove_button.setMinimumHeight(30)
+            remove_button.setMinimumWidth(50)
             can_remove = self._can_manage_members and project is not None and member.user_id != project.creator_id
             remove_button.setEnabled(can_remove)
             remove_button.clicked.connect(
