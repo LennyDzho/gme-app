@@ -2355,6 +2355,7 @@ class ProjectView(QWidget):
 
     def _collect_report_charts(self) -> list[dict[str, Any]]:
         charts: list[dict[str, Any]] = []
+        default_emotion_color = QColor("#0ea5e9")
 
         def add_chart(
             title: str,
@@ -2380,7 +2381,7 @@ class ProjectView(QWidget):
             video_legend = [
                 (
                     emotion_label_ru(name),
-                    EMOTION_COLORS.get(name, QColor("#0ea5e9")),
+                    EMOTION_COLORS.get(name, default_emotion_color),
                     self._series_line_description(name),
                 )
                 for name in self.timeline_widget.visible_series()
@@ -2392,11 +2393,50 @@ class ProjectView(QWidget):
                 self.timeline_widget,
             )
 
+            report_video_series = self._collect_series_names(
+                self._filter_timeline_series(self.current_video_timeline, self._video_enabled_series)
+            )
+            if not report_video_series:
+                report_video_series = self._collect_series_names(self.current_video_timeline)
+
+            emotion_series = [
+                name
+                for name in report_video_series
+                if name not in LIE_RISK_KEYS and name != "truth"
+            ]
+
+            base_size = self.timeline_widget.size()
+            if base_size.width() <= 0 or base_size.height() <= 0:
+                base_size = QSize(960, 320)
+
+            for emotion_name in emotion_series:
+                series_points = self._filter_timeline_series(self.current_video_timeline, {emotion_name})
+                if not series_points:
+                    continue
+
+                emotion_title = emotion_label_ru(emotion_name)
+                emotion_widget = EmotionTimelineWidget()
+                emotion_widget.resize(base_size)
+                emotion_widget.set_points(series_points)
+                add_chart(
+                    f"Видео: эмоция «{emotion_title}»",
+                    f"График показывает, как меняется вероятность эмоции «{emotion_title}» в видеопотоке по времени.",
+                    [
+                        (
+                            emotion_title,
+                            EMOTION_COLORS.get(emotion_name, default_emotion_color),
+                            self._series_line_description(emotion_name),
+                        )
+                    ],
+                    emotion_widget,
+                )
+                emotion_widget.deleteLater()
+
         if self.current_audio_timeline:
             audio_legend = [
                 (
                     emotion_label_ru(name),
-                    EMOTION_COLORS.get(name, QColor("#0ea5e9")),
+                    EMOTION_COLORS.get(name, default_emotion_color),
                     self._series_line_description(name),
                 )
                 for name in self.audio_timeline_widget.visible_series()
